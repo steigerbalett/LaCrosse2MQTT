@@ -134,6 +134,7 @@ bool load_config()
     config.proto_hp1000 = false;
     config.proto_wh65b = false;    
     config.toggle_interval_ms = 20000; /* default: 20 Sekunden */
+    config.fhem_mode = false;
 
     if (!littlefs_ok)
         return false;
@@ -173,6 +174,8 @@ bool load_config()
         if (!doc["mqtt_use_names"].isNull()) {
             config.mqtt_use_names = doc["mqtt_use_names"];
         }
+        if (!doc["fhem_mode"].isNull())
+            config.fhem_mode = doc["fhem_mode"];
         if (!doc["proto_lacrosse"].isNull())
             config.proto_lacrosse = doc["proto_lacrosse"];
         if (!doc["proto_wh1080"].isNull())
@@ -210,6 +213,7 @@ bool load_config()
         Serial.println("ha_discovery: " + String(config.ha_discovery));
         Serial.println("display_on: " + String(config.display_on));
         Serial.println("debug_mode: " + String(config.debug_mode));
+        Serial.println("fhem_mode: " + String(config.fhem_mode));
         Serial.println("screensaver_mode: " + String(config.screensaver_mode));
         Serial.println("proto_lacrosse: " + String(config.proto_lacrosse));
         Serial.println("proto_wh1080: " + String(config.proto_wh1080));
@@ -253,6 +257,7 @@ bool save_config()
     doc["debug_mode"] = config.debug_mode;
     doc["screensaver_mode"] = config.screensaver_mode;
     doc["mqtt_use_names"] = config.mqtt_use_names;
+    doc["fhem_mode"] = config.fhem_mode;
     doc["proto_lacrosse"] = config.proto_lacrosse;
     doc["proto_wh1080"] = config.proto_wh1080;
     doc["proto_tx38it"] = config.proto_tx38it;
@@ -269,7 +274,7 @@ bool save_config()
     doc["toggle_interval_ms"] = config.toggle_interval_ms;
     
     if (serializeJson(doc, cfg) == 0) {
-        Serial.println("FFailed to write config.json");
+        Serial.println("Failed to write config.json");
         ret = false;
     }
     
@@ -2257,6 +2262,15 @@ void handle_config() {
             Serial.println("Debug mode changed to: " + String(config.debug_mode));
         }
     }
+    if (server.hasArg("fhem_mode")) {
+        String fhem_val = server.arg("fhem_mode");
+        bool new_fhem = (fhem_val == "1");
+        if (new_fhem != config.fhem_mode) {
+            config.fhem_mode = new_fhem;
+            config_changed = true;
+            Serial.println("FHEM mode CHANGED to: " + String(config.fhem_mode));
+        }
+    }
     if (server.hasArg("screensaver_mode")) {
         String _on = server.arg("screensaver_mode");
         int tmp = _on.toInt();
@@ -2731,7 +2745,7 @@ if (any_active && interval_sec > 0) {
     resp += "</div>";
     resp += "<button type='submit'>Update Debug Mode</button>";
     resp += "</form>";
-    resp += "</div>";
+    resp += "</div>";    
     
     resp += "<div class='card'>";
     resp += "<h2>Screensaver Settings</h2>";
@@ -2779,6 +2793,28 @@ if (any_active && interval_sec > 0) {
     resp += "</div>";
     resp += "</div>";
     resp += "<button type=\"submit\">Update MQTT Topics</button>";
+    resp += "</form>";
+    resp += "</div>";
+
+    resp += "<div class='card'>";
+    resp += "<h2>FHEM Mode</h2>";
+    resp += "<form action='/config.html'>";
+    resp += "<div class='radio-group'>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "<input type='radio' name='fhem_mode' value='1'" + (config.fhem_mode ? checked : "") + " />\n";
+    resp += "      Enable FHEM Mode";
+    resp += "    </label>";
+    resp += "    <div class='option-description'>Outputs LaCrosse frames as LaCrosseGateway-compatible lines on the serial port (OK 9 ...)</div>";
+    resp += "  </div>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "      <input type='radio' name='fhem_mode' value='0'" + (!config.fhem_mode ? checked : "") + " />\n";
+    resp += "      Disable";
+    resp += "    </label>";
+    resp += "  </div>";
+    resp += "</div>";
+    resp += "<button type='submit'>Update FHEM Mode</button>";
     resp += "</form>";
     resp += "</div>";
 

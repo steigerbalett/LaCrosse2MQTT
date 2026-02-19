@@ -1,7 +1,10 @@
 #ifndef _GLOBALS_H
 #define _GLOBALS_H
 
-#define LACROSSE2MQTT_VERSION "v2026.2.5"
+#include <stdint.h>
+#include <Arduino.h>
+
+#define LACROSSE2MQTT_VERSION "v2026.2.6"
 
 /* if not heltec_lora_32_v2 board... */
 #ifndef WIFI_LoRa_32_V2
@@ -47,15 +50,15 @@ static const uint8_t LED_BUILTIN = 2;
 #define HASS_CFG_HUMI (1 << 0)
 #define HASS_CFG_TEMP (1 << 1)
 #define HASS_CFG_TEMP2 (1 << 2)
-#define HASS_CFG_WIND_SPEED (1 << 3)      // NEU
-#define HASS_CFG_WIND_DIR (1 << 4)        // NEU
-#define HASS_CFG_WIND_GUST (1 << 5)       // NEU
-#define HASS_CFG_RAIN (1 << 6)            // NEU
-#define HASS_CFG_POWER (1 << 7)           // NEU
-#define HASS_CFG_ENERGY (1 << 8)          // NEU
-#define HASS_CFG_PRESSURE (1 << 9)        // NEU
-#define HASS_CFG_UV (1 << 10)             // NEU für UV-Index
-#define HASS_CFG_LIGHT (1 << 11)          // NEU für Lichtintensität
+#define HASS_CFG_WIND_SPEED (1 << 3)
+#define HASS_CFG_WIND_DIR (1 << 4)
+#define HASS_CFG_WIND_GUST (1 << 5)
+#define HASS_CFG_RAIN (1 << 6)
+#define HASS_CFG_POWER (1 << 7)
+#define HASS_CFG_ENERGY (1 << 8)
+#define HASS_CFG_PRESSURE (1 << 9)
+#define HASS_CFG_UV (1 << 10)             // UV-Index
+#define HASS_CFG_LIGHT (1 << 11)          // Lichtintensität
 
 #define BASE_SENSOR_TIMEOUT 300000   // 5 Minuten Basis-Timeout
 #define TIMEOUT_PER_PROTOCOL 60000   // +1 Minute pro aktiviertem Protokoll
@@ -137,7 +140,10 @@ struct Config {
     bool proto_wh25;
     bool proto_hp1000;
     bool proto_wh65b;
-    int toggle_interval_ms; 
+    int toggle_interval_ms;
+    bool fhem_mode;           // Enable FHEM compatibility mode
+    bool fhem_verbose;        // Verbose output in FHEM mode
+    uint8_t fhem_datarate;    // Default datarate: 0=17.241kbps, 1=9.579kbps, 2=8.842kbps
 };
 
 extern int num_datarates;
@@ -149,6 +155,7 @@ extern uint8_t hass_cfg[SENSOR_NUM];
 extern uint16_t hass_published[SENSOR_NUM];
 extern bool littlefs_ok;
 extern bool mqtt_ok;
+extern int freq;
 
 static inline uint32_t uptime_sec() { return (esp_timer_get_time()/(int64_t)1000000); }
 

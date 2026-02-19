@@ -9,7 +9,7 @@ This document contains all licenses and attributions for software components use
 **Copyright:** (C) 2021 Stefan Seyfried  
 **License:** GNU General Public License v2.0 or later (GPL-2.0-or-later)  
 **SPDX-License-Identifier:** GPL-2.0-or-later  
-**Repository:** https://github.com/steigerbalett/lacrosse2mqtt
+**Repository:** https://github.com/seife/lacrosse2mqtt
 
 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
 
@@ -307,6 +307,19 @@ Teile des Codes (insbesondere Protokoll-Decoder für WH24/WH25/W136 sowie seriel
 **Purpose:** Protocol documentation and reference for 433/868MHz sensors
 **License:** GPL-2.0
 
+### Protokoll-Implementierungen
+| Protokoll | Quelle |
+|---|---|
+| LaCrosse IT+ (TX29/TX35/TX38) | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/lacrosse_tx35.c) |
+| WH1080 | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/fineoffset.c) |
+| WS1600 | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/fineoffset.c) |
+| WT440XH | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/fineoffset.c) |
+| TX22IT | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/fineoffset_tx22.c) |
+| EMT7110 | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/emt7110.c) |
+| W136 | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/w136.c) |
+| WH24/WH25 | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/wh24.c) |
+| HP1000 | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/hp1000.c) |
+| WH65B | [rtl_433](https://github.com/merbanan/rtl_433/blob/master/src/devices/wh65.c) |
 ---
 
 ### WH1080 Protocol Documentation
@@ -337,6 +350,17 @@ Relevant modules used as reference:
 - 36_LaCrosse.pm - LaCrosse IT+ sensor protocol decoder
 - 14_SD_WS.pm - Weather station protocols (WH1080, WS1600, etc.)
 - SIGNALduino - Radio signal processing foundation
+
+---
+
+### FHEM-Integration
+- **LaCrosseGateway Format**: FHEM Community  
+  [https://forum.fhem.de/index.php/topic,117882.0.html](https://forum.fhem.de/index.php/topic,117882.0.html)
+
+### Weitere Quellen
+- **NTP Time Sync**: ESP32 Arduino Core Examples
+- **Home Assistant Discovery**: HA MQTT Integration Docs  
+  [https://www.home-assistant.io/integrations/mqtt/](https://www.home-assistant.io/integrations/mqtt/)
 
 ---
 
@@ -382,4 +406,4 @@ https://github.com/steigerbalett/lacrosse2mqtt/issues
 
 ---
 
-*Last updated: January 2026*
+*Last updated: February 2026*
