@@ -918,6 +918,22 @@ void receive()
         
         LaCrosse::DisplayFrame(payload, &lacrosse_frame);
 
+        // FHEM connector
+        if (FHEMConnector::isEnabled()) {
+            // FHEM Format: OK 9 <ID> <NewBatt> <0> <Channel> <Temp> <Humi> <LowBatt>
+            //              (type=0 für LaCrosse IT+ Sensoren)
+            String fhemData = String("OK 9 ") + 
+                            String(lacrosse_frame.ID) + " " +
+                            String(lacrosse_frame.init ? "1" : "0") + " " +
+                            "0" + " " +  // ← Typ 0 = LaCrosse IT+
+                            String(lacrosse_frame.channel) + " " +
+                            String(lacrosse_frame.temp, 1) + " " +
+                            String(lacrosse_frame.humi) + " " +
+                            String(lacrosse_frame.batlo ? "1" : "0");
+    
+                FHEMConnector::sendSensorData(fhemData);
+        }  
+
         // MQTT Publishing - ENTWEDER Named Topics ODER ID Topics (nie beides)
         String mqttBaseTopic;
         String sensorIdentifier;
@@ -1021,6 +1037,10 @@ void setup(void)
     Serial.println(WiFi.localIP());
 
     setup_ntp();
+
+    if (config.fhem_mode) {
+        FHEMConnector::initTCPServer();
+    }
 
     littlefs_ok = LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED);
     if (!littlefs_ok)
@@ -1145,6 +1165,8 @@ void loop(void)
     delay(10);
     
     handle_client();
+
+    FHEMConnector::handleTCPClients();
 
     uint32_t button_time = check_button();
     if (button_time > 100 && button_time <= 2000) {

@@ -35,6 +35,7 @@ On the config page, you can enter the hostname / IP of your MQTT broker. The top
 
 ## FHEM Connector
 Set FHEM Mode in the settings to use the serial output from the gateway as a direct replacement for the original LaCrosseGateway (LGW)
+'define myLaCrosseGW LaCrosseGateway <IP-ADRESSE>:81'
 
 ## First upload
  * Open Chrome or any chromium based browser.
