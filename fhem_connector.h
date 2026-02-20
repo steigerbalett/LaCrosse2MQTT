@@ -16,8 +16,6 @@ public:
     static void sendSensorData(const String& line);
     static bool isEnabled();
     static void handleSerialCommand();
-    
-    // Neue TCP-Server Funktionen
     static void initTCPServer();
     static void handleTCPClients();
     static void sendToClients(const String& data);

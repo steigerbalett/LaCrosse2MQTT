@@ -1038,10 +1038,6 @@ void setup(void)
 
     setup_ntp();
 
-    if (config.fhem_mode) {
-        FHEMConnector::initTCPServer();
-    }
-
     littlefs_ok = LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED);
     if (!littlefs_ok)
         Serial.println("LittleFS Mount Failed");
@@ -1053,7 +1049,8 @@ void setup(void)
 
     // ========== FHEM MODE INITIALISIERUNG ==========
     if (config.fhem_mode) {
-        Serial.println();
+        FHEMConnector::init(); 
+        FHEMConnector::initTCPServer();
         FHEMConnector::sendVersionInfo();
         Serial.println("FHEM mode enabled");
     }
