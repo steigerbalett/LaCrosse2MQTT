@@ -7,6 +7,7 @@
 #include <rom/rtc.h>
 #include "WiFi.h"
 #include "update_check.h"
+#include "fhem_connector.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -135,6 +136,7 @@ bool load_config()
     config.proto_wh65b = false;    
     config.toggle_interval_ms = 20000; /* default: 20 Sekunden */
     config.fhem_mode = false;
+    config.fhem_format = false;
 
     if (!littlefs_ok)
         return false;
@@ -176,6 +178,8 @@ bool load_config()
         }
         if (!doc["fhem_mode"].isNull())
             config.fhem_mode = doc["fhem_mode"];
+        if (!doc["fhem_format"].isNull())
+            config.fhem_format = doc["fhem_format"];
         if (!doc["proto_lacrosse"].isNull())
             config.proto_lacrosse = doc["proto_lacrosse"];
         if (!doc["proto_wh1080"].isNull())
@@ -272,6 +276,8 @@ bool save_config()
     doc["proto_hp1000"] = config.proto_hp1000;
     doc["proto_wh65b"] = config.proto_wh65b;
     doc["toggle_interval_ms"] = config.toggle_interval_ms;
+    doc["fhem_mode"] = config.fhem_mode;
+    doc["fhem_format"] = config.fhem_format;
     
     if (serializeJson(doc, cfg) == 0) {
         Serial.println("Failed to write config.json");
@@ -833,6 +839,10 @@ void handle_sensors_json() {
     doc["wifi_ip"] = WiFi.localIP().toString();
     doc["cpu_usage"] = serialized(String(cpu_usage, 1));
     doc["current_datarate"] = get_current_datarate();
+    doc["fhem_clients"] = FHEMConnector::getActiveClientCount();
+    doc["fhem_enabled"] = config.fhem_mode;
+    doc["fhem_format"] = config.fhem_format ? "jeelink" : "lacrossegateway";
+    doc["fhem_format_name"] = FHEMConnector::getCurrentFormatName();
     
     String output;
     serializeJson(doc, output);
@@ -1206,6 +1216,15 @@ s += "<script>"
 "alert('Update failed!');"
 "document.getElementById('update-progress-container').style.display='none';"
 "});}"
+
+// FHEM Client Status aktualisieren
+"const fhemStatus=document.getElementById('fhem-status');"
+"if(fhemStatus&&data.fhem_clients!==undefined){"
+"if(data.fhem_clients===0){"
+"fhemStatus.innerHTML=\"<span class='status-badge status-error'>Keine Verbindung</span>\";"
+"}else{"
+"fhemStatus.innerHTML=\"<span class='status-badge status-ok'>✓ \"+data.fhem_clients+\" Verbindung(en)</span>\";"
+"}}"
 
 "</script>";
     }
@@ -2211,6 +2230,11 @@ void handle_config() {
     static unsigned long token = millis();
     static bool just_saved = false;
     
+    if (server.hasArg("fhem_format")) {
+        config.fhem_format = server.arg("fhem_format") == "1";
+        config.changed = true;
+        config_changed = true;
+    }
     if (server.hasArg("id") && server.hasArg("name")) {
         String _id = server.arg("id");
         String name = server.arg("name");
@@ -2244,15 +2268,23 @@ void handle_config() {
         config.changed = true;
         config_changed = true;
     }
-    if (server.hasArg("save")) {
-        if (server.arg("save") == String(token)) {
-            Serial.println("SAVE!");
-            save_idmap();
-            save_config();
-            config_changed = false;
-            just_saved = true;
-        }
+    String saveArg = server.arg("save");
+    if (server.hasArg("save") && saveArg == String(token)) {
+        save_idmap();
+        save_config();
+        config_changed = false;
+        just_saved = true;
+        Serial.println("SAVE!");
     }
+//    if (server.hasArg("save")) {
+//        if (server.arg("save") == String(token)) {
+//            Serial.println("SAVE!");
+//            save_idmap();
+//            save_config();
+//            config_changed = false;
+//            just_saved = true;
+//        }
+//    }
     if (server.hasArg("debug_mode")) {
         String _on = server.arg("debug_mode");
         int tmp = _on.toInt();
@@ -2268,7 +2300,21 @@ void handle_config() {
         if (new_fhem != config.fhem_mode) {
             config.fhem_mode = new_fhem;
             config_changed = true;
+            if (new_fhem) {
+                FHEMConnector::setFormat(config.fhem_format);
+                FHEMConnector::initTCPServer();
+            }
             Serial.println("FHEM mode CHANGED to: " + String(config.fhem_mode));
+        }
+    }
+    if (server.hasArg("fhem_format")) {
+        bool newFormat = server.arg("fhem_format") == "1";
+        if (newFormat != config.fhem_format) {
+            config.fhem_format = newFormat;
+            config.changed = true;
+            config_changed = true;
+            FHEMConnector::setFormat(newFormat);
+            Serial.println("FHEM Format: " + FHEMConnector::getCurrentFormatName());
         }
     }
     if (server.hasArg("screensaver_mode")) {
@@ -2470,6 +2516,11 @@ if (just_saved) {
 
     resp += "<div class='card-grid'>";
     
+
+    resp += "<div class='card card-full'>";
+    add_current_table(resp, true);
+    resp += "</div>";
+
     resp += "<div class='card'>";
     resp += "<h2>System Status</h2>";
     resp += "<p id='system-status'>";
@@ -2595,12 +2646,11 @@ if (any_active && interval_sec > 0) {
     resp += "<a href='/' class='action-button'>🏠 Main Page</a>";
     resp += "</div>";
 
-        resp += "<div class='info-row' style='margin-top:15px;'>";
+    resp += "<div class='info-row' style='margin-top:15px;'>";
     resp += "<button onclick='confirmReboot()' style='width:100%;padding:12px;background-color:#dc3545;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:all 0.3s ease;'>";
     resp += "🔄 Reboot";
     resp += "</button>";
-    resp += "</div>";
-    
+    resp += "</div>";    
     resp += "</div>";
 
     resp += "<div class='card'>";
@@ -2620,13 +2670,36 @@ if (any_active && interval_sec > 0) {
     resp += "</div>";
 
     resp += "</div>";
+
+        if (config_changed) {
+        resp += "<div class='card' style='background-color: rgba(255, 152, 0, 0.1); border: 1px solid var(--warning-color);'>";
+        resp += "<h3>⚠️ Unsaved Changes</h3>";
+        resp += "<p>You have unsaved configuration changes. Please save or reload to discard.</p>";
+        resp += "<form action='/config.html' style='display: inline; margin-right: 8px;'>";
+        resp += "<input type='hidden' name='save' value='" + String(token) + "'>";
+        resp += "<button type='submit' style='background-color: var(--success-color);'>💾 Save Configuration</button>";
+        resp += "</form>";
+        resp += "<form action='/config.html' style='display: inline;'>";
+        resp += "<input type='hidden' name='cancel' value='" + String(token) + "'>";
+        resp += "<button type='submit' style='background-color: var(--error-color);'>🔄 Discard Changes</button>";
+        resp += "</form>";
+        resp += "</div>";
+    }
     
-    resp += "<div class='card card-full'>";
-    add_current_table(resp, true);
+    if (!littlefs_ok) {
+        resp += "<div class='card' style='background-color: rgba(244, 67, 54, 0.1); border: 1px solid var(--error-color);'>";
+        resp += "<h3>❌ Filesystem Error</h3>";
+        resp += "<p><strong>LittleFS seems damaged. Saving will not work.</strong></p>";
+        resp += "<p>This will erase all saved configuration. Continue?</p>";
+        resp += "<form action='/config.html'>";
+        resp += "<input type='hidden' name='format' value='" + String(token) + "'>";
+        resp += "<button type='submit' style='background-color: var(--error-color);'>⚠️ Format Filesystem</button>";
+        resp += "</form>";
+        resp += "</div>";
+    }
+
     resp += "</div>";
-    
-    token = millis();
-    
+
     resp += "<div class='card-grid'>";
     
     resp += "<div class='card'>";
@@ -2654,33 +2727,6 @@ if (any_active && interval_sec > 0) {
     resp += "<button type='submit'>Update MQTT Settings</button>";
     resp += "</form>";
     resp += "</div>";
-    
-    if (config_changed) {
-        resp += "<div class='card' style='background-color: rgba(255, 152, 0, 0.1); border: 1px solid var(--warning-color);'>";
-        resp += "<h3>⚠️ Unsaved Changes</h3>";
-        resp += "<p>You have unsaved configuration changes. Please save or reload to discard.</p>";
-        resp += "<form action='/config.html' style='display: inline; margin-right: 8px;'>";
-        resp += "<input type='hidden' name='save' value='" + String(token) + "'>";
-        resp += "<button type='submit' style='background-color: var(--success-color);'>💾 Save Configuration</button>";
-        resp += "</form>";
-        resp += "<form action='/config.html' style='display: inline;'>";
-        resp += "<input type='hidden' name='cancel' value='" + String(token) + "'>";
-        resp += "<button type='submit' style='background-color: var(--error-color);'>🔄 Discard Changes</button>";
-        resp += "</form>";
-        resp += "</div>";
-    }
-    
-    if (!littlefs_ok) {
-        resp += "<div class='card' style='background-color: rgba(244, 67, 54, 0.1); border: 1px solid var(--error-color);'>";
-        resp += "<h3>❌ Filesystem Error</h3>";
-        resp += "<p><strong>LittleFS seems damaged. Saving will not work.</strong></p>";
-        resp += "<p>This will erase all saved configuration. Continue?</p>";
-        resp += "<form action='/config.html'>";
-        resp += "<input type='hidden' name='format' value='" + String(token) + "'>";
-        resp += "<button type='submit' style='background-color: var(--error-color);'>⚠️ Format Filesystem</button>";
-        resp += "</form>";
-        resp += "</div>";
-    }
     
     resp += "<div class='card'>";
     resp += "<h2>Display Settings</h2>";
@@ -2724,28 +2770,6 @@ if (any_active && interval_sec > 0) {
     resp += "<button type='submit'>Update Home Assistant</button>";
     resp += "</form>";
     resp += "</div>";
-    
-    resp += "<div class='card'>";
-    resp += "<h2>Debug Settings</h2>";
-    resp += "<form action='/config.html'>";
-    resp += "<div class='radio-group'>";
-    resp += "  <div class='radio-item'>";
-    resp += "    <label>";
-    resp += "      <input type='radio' name='debug_mode' value='1'" + (config.debug_mode ? checked : "") + "/>";
-    resp += "      Enable Debug Mode";
-    resp += "    </label>";
-    resp += "    <div class='option-description'>Show RAW frame data in serial console for troubleshooting</div>";
-    resp += "  </div>";
-    resp += "  <div class='radio-item'>";
-    resp += "    <label>";
-    resp += "      <input type='radio' name='debug_mode' value='0'" + (!config.debug_mode ? checked : "") + "/>";
-    resp += "      Disable";
-    resp += "    </label>";
-    resp += "  </div>";
-    resp += "</div>";
-    resp += "<button type='submit'>Update Debug Mode</button>";
-    resp += "</form>";
-    resp += "</div>";    
     
     resp += "<div class='card'>";
     resp += "<h2>Screensaver Settings</h2>";
@@ -2797,6 +2821,28 @@ if (any_active && interval_sec > 0) {
     resp += "</div>";
 
     resp += "<div class='card'>";
+    resp += "<h2>Debug Settings</h2>";
+    resp += "<form action='/config.html'>";
+    resp += "<div class='radio-group'>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "      <input type='radio' name='debug_mode' value='1'" + (config.debug_mode ? checked : "") + "/>";
+    resp += "      Enable Debug Mode";
+    resp += "    </label>";
+    resp += "    <div class='option-description'>Show RAW frame data in serial console for troubleshooting</div>";
+    resp += "  </div>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "      <input type='radio' name='debug_mode' value='0'" + (!config.debug_mode ? checked : "") + "/>";
+    resp += "      Disable";
+    resp += "    </label>";
+    resp += "  </div>";
+    resp += "</div>";
+    resp += "<button type='submit'>Update Debug Mode</button>";
+    resp += "</form>";
+    resp += "</div>";    
+
+    resp += "<div class='card'>";
     resp += "<h2>FHEM Mode</h2>";
     resp += "<form action='/config.html'>";
     resp += "<div class='radio-group'>";
@@ -2817,6 +2863,50 @@ if (any_active && interval_sec > 0) {
     resp += "<button type='submit'>Update FHEM Mode</button>";
     resp += "</form>";
     resp += "</div>";
+
+        if (config.fhem_mode) {
+    resp += "<div class='card'>";
+    resp += "<h2>📡 FHEM / Telnet</h2>";
+    resp += "<p>Status: " + FHEMConnector::getClientStatusHTML() + "</p>";
+    resp += "<p>Aktive: <strong>" + String(FHEMConnector::getActiveClientCount()) + " / 4</strong></p>";
+    resp += "<p>Format: <strong>" + FHEMConnector::getCurrentFormatName() + "</strong></p>";
+    resp += "<form action='/config.html'>";
+    resp += "<div class='radio-group'>";
+    resp += "<div class='radio-item'>";
+    resp += "<label>";
+    resp += "<input type='radio' name='fhem_format' value='1'" + (config.fhem_format ? checked : "") + "/>";
+    resp += "JeeLink (OK 9 ID Channel Temp...)";
+    resp += "</label>";
+    resp += "<div class='option-description'>";
+    resp += "FHEM:<br><code>define myLGW JeeLink " + WiFi.localIP().toString() + ":81</code><br>";
+    resp += "USB: <code>define myLGW JeeLink /dev/ttyUSB0@115200</code>";
+    resp += "</div>";
+    resp += "</div>";
+    resp += "<div class='radio-item'>";
+    resp += "<label>";
+    resp += "<input type='radio' name='fhem_format' value='0'" + (!config.fhem_format ? checked : "") + "/>";
+    resp += "LaCrosseGateway (ID Channel Temp...)";
+    resp += "</label>";
+    resp += "<div class='option-description'>";
+    resp += "FHEM:<br><code>define myLGW LaCrosseGateway " + WiFi.localIP().toString() + ":81</code>";
+    resp += "</div>";
+    resp += "</div>";
+    resp += "</div>";
+    resp += "<button type='submit' style='margin-top:8px;'>Update Format</button>";
+    resp += "</form>";
+    resp += "</div>";
+    } else {
+        // FHEM-Modus deaktiviert – kompakte Info
+        resp += "<div class='card'>";
+        resp += "<h2>📡 FHEM / Telnet</h2>";
+        resp += "<p><span class='status-badge status-warning'>⚠️ FHEM-Modus deaktiviert</span></p>";
+        resp += "<p class='info-text'>Aktiviere FHEM-Modus weiter unten um den TCP-Server zu starten.</p>";
+        resp += "</div>";
+    }
+
+//    resp += "</div>";
+
+    token = millis();
 
     resp += "<div class='card'>";
     resp += "<h2>⏱️ Protocol Switching Settings</h2>";

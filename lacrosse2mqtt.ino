@@ -36,7 +36,7 @@
 #include "wh25.h"
 #include "hp1000.h"
 #include "wh65b.h"
-#include "fhem_connector.h"  // FHEM Connector hinzugefügt
+#include "fhem_connector.h"
 #include <WiFiManager.h>
 #include <time.h>
 
@@ -1050,8 +1050,6 @@ void setup(void)
     // ========== FHEM MODE INITIALISIERUNG ==========
     if (config.fhem_mode) {
         FHEMConnector::init(); 
-        FHEMConnector::initTCPServer();
-        FHEMConnector::sendVersionInfo();
         Serial.println("FHEM mode enabled");
     }
 

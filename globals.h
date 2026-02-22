@@ -144,6 +144,7 @@ struct Config {
     bool fhem_mode;           // Enable FHEM compatibility mode
     bool fhem_verbose;        // Verbose output in FHEM mode
     uint8_t fhem_datarate;    // Default datarate: 0=17.241kbps, 1=9.579kbps, 2=8.842kbps
+    bool fhem_format;         // true=JeeLink (OK 9), false=LaCrosseGateway
 };
 
 extern int num_datarates;

@@ -73,6 +73,7 @@ The following libraries are needed for building (could all be installed via ardu
 ## Nice2have
  * Avoid 0.000kbs decode
  * Avoid send ID data over MQTT if name is chosen
+ * Refractor Code
 
 ## Know problems
 

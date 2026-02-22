@@ -1,213 +1,206 @@
-// fhem_connector.cpp
 #include "fhem_connector.h"
 #include <Arduino.h>
 
-// Statische Membervariablen
-WiFiServer* FHEMConnector::tcpServer = nullptr;
-WiFiClient FHEMConnector::clients[MAX_FHEM_CLIENTS];
-bool FHEMConnector::clientConnected[MAX_FHEM_CLIENTS] = {false};
-unsigned long FHEMConnector::lastClientCheck = 0;
+extern int freq;
+extern int get_current_datarate();
 
+// Statische Member-Definitionen
+WiFiServer*   FHEMConnector::tcpServer = nullptr;
+WiFiClient    FHEMConnector::clients[MAX_FHEM_CLIENTS];
+bool          FHEMConnector::clientConnected[MAX_FHEM_CLIENTS] = {false};
+unsigned long FHEMConnector::clientConnectedSince[MAX_FHEM_CLIENTS] = {0};
+bool          FHEMConnector::jeelinkMode = false;
+
+// =============================================
 void FHEMConnector::init() {
     if (config.fhem_mode) {
-        Serial.println("=== FHEM LaCrosseGateway Mode ACTIVE ===");
-        sendVersionInfo();
-        
-        // TCP-Server initialisieren
+        jeelinkMode = config.fhem_format;
+        Serial.printf("=== FHEM Mode ACTIVE: %s ===\n", getCurrentFormatName().c_str());
         initTCPServer();
     }
 }
 
+// =============================================
 void FHEMConnector::initTCPServer() {
     if (!config.fhem_mode) return;
-    
+
     if (tcpServer != nullptr) {
+        tcpServer->end();
         delete tcpServer;
+        tcpServer = nullptr;
     }
-    
+
     tcpServer = new WiFiServer(FHEM_TCP_PORT);
     tcpServer->begin();
     tcpServer->setNoDelay(true);
-    
-    Serial.printf("FHEM TCP Server started on port %d\n", FHEM_TCP_PORT);
-    Serial.printf("Connect FHEM with: define myLGW LaCrosseGateway %s:%d\n", 
-                  WiFi.localIP().toString().c_str(), FHEM_TCP_PORT);
-    
-    // Initialisiere Client-Array
+
     for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
         clientConnected[i] = false;
+        clientConnectedSince[i] = 0;
+    }
+
+    Serial.printf("[FHEM] TCP Server gestartet auf Port %d\n", FHEM_TCP_PORT);
+    Serial.printf("[FHEM] FHEM define: define myLGW %s %s:%d\n",
+                  jeelinkMode ? "JeeLink" : "LaCrosseGateway",
+                  WiFi.localIP().toString().c_str(), FHEM_TCP_PORT);
+}
+
+// =============================================
+void FHEMConnector::handleTCPClients() {
+    if (!config.fhem_mode || tcpServer == nullptr) return;
+
+    WiFiClient newClient = tcpServer->accept();
+    if (newClient && newClient.connected()) {
+        bool slotFound = false;
+        for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
+            if (!clientConnected[i] || !clients[i].connected()) {
+                if (clientConnected[i]) clients[i].stop();
+                clients[i] = newClient;
+                clientConnected[i] = true;
+                clientConnectedSince[i] = millis();
+                slotFound = true;
+                Serial.printf("[FHEM] Client #%d verbunden: %s\n",
+                              i, clients[i].remoteIP().toString().c_str());
+                sendLaCrosseGatewayHandshake(&clients[i]);
+                break;
+            }
+        }
+        if (!slotFound) {
+            Serial.println("[FHEM] Max Clients erreicht, Verbindung abgelehnt");
+            newClient.stop();
+        }
+    }
+
+    for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
+        if (!clientConnected[i]) continue;
+        if (!clients[i].connected()) {
+            Serial.printf("[FHEM] Client #%d getrennt\n", i);
+            clients[i].stop();
+            clientConnected[i] = false;
+            clientConnectedSince[i] = 0;
+            continue;
+        }
+        if (clients[i].available()) {
+            String cmd = clients[i].readStringUntil('\n');
+            cmd.trim();
+            if (cmd.length() > 0) handleClientCommand(&clients[i], cmd);
+        }
     }
 }
 
-void FHEMConnector::handleTCPClients() {
-    if (!config.fhem_mode || tcpServer == nullptr) return;
-    
-    unsigned long now = millis();
-    
-    // Prüfe auf neue Clients (alle 100ms)
-    if (now - lastClientCheck > 100) {
-        lastClientCheck = now;
-        WiFiClient newClient = tcpServer->accept();
-        
-        if (newClient) {
-            // Finde einen freien Slot
-            bool slotFound = false;
-            for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
-                if (!clientConnected[i] || !clients[i].connected()) {
-                    if (clientConnected[i]) {
-                        clients[i].stop();
-                    }
-                    clients[i] = newClient;
-                    clientConnected[i] = true;
-                    slotFound = true;
-                    
-                    Serial.printf("FHEM Client #%d connected from %s\n", 
-                                  i, clients[i].remoteIP().toString().c_str());
-                    
-                    // Sende Versions-Info an neuen Client
-                    sendVersionToClient(&clients[i]);
-                    break;
-                }
-            }
-            
-            if (!slotFound) {
-                Serial.println("FHEM: Max clients reached, rejecting connection");
-                newClient.stop();
-            }
+// =============================================
+void FHEMConnector::sendLaCrosseGatewayHandshake(WiFiClient* client) {
+    if (!client || !client->connected()) return;
+    if (jeelinkMode) {
+        // JeeLink Handshake
+        client->println("[JeeLink v3c]");
+        client->println("Available commands:");
+        client->println("l -> list configuration");
+        client->println("v -> show version");
+        client->println("Ready");
+    } else {
+        // LaCrosseGateway Handshake
+        client->println("[LaCrosseITPlusReader V2026]");
+        client->printf("Freq: %d\n", freq);
+        client->printf("Rate: %d\n", get_current_datarate());
+        client->println("Ready");
+    }
+    Serial.printf("[FHEM] Handshake gesendet (%s)\n", getCurrentFormatName().c_str());
+}
+
+// =============================================
+void FHEMConnector::handleClientCommand(WiFiClient* client, String command) {
+    command.trim();
+    String lower = command;
+    lower.toLowerCase();
+    Serial.printf("[FHEM] CMD: '%s'\n", command.c_str());
+
+    if (lower == "v" || lower == "version") {
+        sendLaCrosseGatewayHandshake(client);
+    } else if (lower.startsWith("rate ") || lower.startsWith("freq ")) {
+        client->println("OK");
+    } else {
+        client->println("ERROR unknown command");
+    }
+}
+
+// =============================================
+void FHEMConnector::setFormat(bool jeelink) {
+    jeelinkMode = jeelink;
+    Serial.printf("[FHEM] Format gewechselt: %s\n", getCurrentFormatName().c_str());
+}
+
+bool FHEMConnector::isJeeLinkFormat() {
+    return jeelinkMode;
+}
+
+String FHEMConnector::getCurrentFormatName() {
+    return jeelinkMode ? "JeeLink (OK 9 ...)" : "LaCrosseGateway (KVP/LC ASCII)";
+}
+
+// =============================================
+// Haupt-Sendefunktion: fertig formatierte Zeile an alle Clients
+// Aufgerufen aus lacrosse.cpp / main.cpp mit dem passenden Format-String
+void FHEMConnector::sendSensorData(const String& line) {
+    if (!config.fhem_mode) return;
+
+    Serial.printf("%s", line.c_str());
+
+    for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
+        if (clientConnected[i] && clients[i].connected()) {
+            clients[i].print(line);
         }
     }
-    
-    // Verarbeite Daten von bestehenden Clients
+}
+
+// =============================================
+bool FHEMConnector::isEnabled() {
+    return config.fhem_mode;
+}
+
+int FHEMConnector::getActiveClientCount() {
+    int count = 0;
     for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
-        if (clientConnected[i]) {
-            // Prüfe ob Client noch verbunden ist
-            if (!clients[i].connected()) {
-                Serial.printf("FHEM Client #%d disconnected\n", i);
-                clients[i].stop();
-                clientConnected[i] = false;
-                continue;
-            }
-            while (clients[i].available()) {
-                String command = clients[i].readStringUntil('\n');
-                command.trim();
-                if (command.length() > 0) {
-                    handleClientCommand(&clients[i], command);
-                }
-            }
+        if (clientConnected[i] && clients[i].connected()) count++;
+    }
+    return count;
+}
+
+String FHEMConnector::getClientStatusHTML() {
+    String html = "";
+    int count = 0;
+    for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
+        if (clientConnected[i] && clients[i].connected()) {
+            unsigned long secs = (millis() - clientConnectedSince[i]) / 1000;
+            html += "<span class='status-badge status-ok'>✓ ";
+            html += clients[i].remoteIP().toString();
+            html += " (" + String(secs) + "s)</span> ";
+            count++;
+        }
+    }
+    if (count == 0)
+        html = "<span class='status-badge status-error'>Keine Verbindung</span>";
+    return html;
+}
+
+// =============================================
+void FHEMConnector::handleSerialCommand() {
+    static String buffer = "";
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            buffer.trim();
+            if (buffer == "version") sendVersionInfo();
+            buffer = "";
+        } else {
+            buffer += c;
         }
     }
 }
 
 void FHEMConnector::sendVersionInfo() {
-    if (!config.fhem_mode) return;
-    
-    String versionMsg = "OK LaCrosse2MQTT v" + String(LACROSSE2MQTT_VERSION) + "\n";
-    String freqMsg = "Freq: " + String(freq) + "\n";
-    String rateMsg = "Rate: " + String(get_current_datarate()) + "\n";
-    String readyMsg = "Ready\n";
-    
-    // An Serial senden
-    Serial.print(versionMsg);
-    Serial.print(freqMsg);
-    Serial.print(rateMsg);
-    Serial.print(readyMsg);
-    
-    // An alle TCP-Clients senden
-    sendToClients(versionMsg + freqMsg + rateMsg + readyMsg);
-}
-
-void FHEMConnector::sendVersionToClient(WiFiClient* client) {
-    if (!config.fhem_mode || client == nullptr || !client->connected()) return;
-    
-    client->printf("OK LaCrosse2MQTT v%s\n", LACROSSE2MQTT_VERSION);
-    client->printf("Freq: %d\n", freq);
-    client->printf("Rate: %d\n", get_current_datarate());
-    client->println("Ready");
-    client->clear();
-}
-
-void FHEMConnector::sendSensorData(const String& line) {
-    if (!config.fhem_mode) return;
-    
-    // An Serial senden
-    Serial.println(line);
-    
-    // An alle verbundenen TCP-Clients senden
-    sendToClients(line + "\n");
-}
-
-void FHEMConnector::sendToClients(const String& data) {
-    if (!config.fhem_mode || tcpServer == nullptr) return;
-    
-    for (int i = 0; i < MAX_FHEM_CLIENTS; i++) {
-        if (clientConnected[i] && clients[i].connected()) {
-            clients[i].print(data);
-            clients[i].clear();  // Sofort senden und Buffer leeren
-        }
-    }
-}
-
-void FHEMConnector::handleClientCommand(WiFiClient* client, String command) {
-    if (client == nullptr || !client->connected()) return;
-    
-    Serial.printf("FHEM TCP CMD from %s: %s\n", 
-                  client->remoteIP().toString().c_str(), 
-                  command.c_str());
-    
-    command.trim();
-    
-    if (command == "version" || command == "V") {
-        sendVersionToClient(client);
-    } 
-    else if (command.startsWith("rate ")) {
-        // Rate-Änderung (optional implementierbar)
-        client->println("OK");
-        client->clear();
-    }
-    else if (command.startsWith("freq ")) {
-        // Frequenz-Änderung (optional implementierbar)
-        client->println("OK");
-        client->clear();
-    }
-    else if (command == "help" || command == "?") {
-        client->println("Available commands:");
-        client->println("  version - Show version info");
-        client->println("  rate <value> - Set data rate");
-        client->println("  freq <value> - Set frequency");
-        client->println("OK");
-        client->clear();
-    }
-    else {
-        client->println("ERROR: Unknown command");
-        client->clear();
-    }
-}
-
-bool FHEMConnector::isEnabled() {
-    return config.fhem_mode;
-}
-
-void FHEMConnector::handleSerialCommand() {
-    static String command_buffer = "";
-    
-    while (Serial.available()) {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') {
-            if (command_buffer.length() > 0) {
-                command_buffer.trim();
-                Serial.println("FHEM Serial CMD: " + command_buffer);
-                
-                if (command_buffer == "version") {
-                    sendVersionInfo();
-                } else if (command_buffer.startsWith("rate ")) {
-                    Serial.println("OK");
-                } else {
-                    Serial.println("ERROR: Unknown command");
-                }
-                command_buffer = "";
-            }
-        } else {
-            command_buffer += c;
-        }
-    }
+    Serial.println("[LaCrosseITPlusReader V2026]");
+    Serial.printf("Freq: %d\n", freq);
+    Serial.printf("Rate: %d\n", get_current_datarate());
+    Serial.println("Ready");
 }
