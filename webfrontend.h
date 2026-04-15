@@ -9,5 +9,9 @@ void handle_config();
 void handle_client();
 void handle_licenses();
 void add_debug_log(uint8_t *data, int8_t rssi, int datarate, bool valid);
+void handle_log();
+void handle_getLogData();
+extern String logGetNew();
+extern void logAppend(const String& line);
 
 #endif

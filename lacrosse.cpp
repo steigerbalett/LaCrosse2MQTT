@@ -188,21 +188,42 @@ bool LaCrosse::DisplayFrame(byte *data, struct Frame *f)
     int displayID = f->ID;
 
     if (config.fhem_mode) {
-        // ── FHEM-Modus: NUR "OK 9 ..." ausgeben ──────────────────────
         int humi = (f->humi > 0 && f->humi <= 100) ? f->humi : 0;
         int bat  = f->batlo ? 0 : 1;
 
-        Serial.print("OK 9 ");
-        Serial.print(displayID);
-        Serial.print(" ");
-        Serial.print(f->channel);
-        Serial.print(" ");
-        Serial.print((int)(f->temp * 10));
-        Serial.print(" ");
-        Serial.print(humi);
-        Serial.print(" ");
-        Serial.println(bat);
+        String line;
+        if (FHEMConnector::isJeeLinkFormat()) {
+            // JeeLink-Format: "OK 9 <ID> <CH> <TEMP_HIGH> <TEMP_LOW> <HUMI> <BAT>"
+            int temp_int = (int)(f->temp * 10) + 1000;  // Offset wie JeeLink
+            line  = "OK 9 ";
+            line += String(displayID);
+            line += " ";
+            line += String(f->channel);
+            line += " ";
+            line += String(temp_int >> 8);   // High Byte
+            line += " ";
+            line += String(temp_int & 0xFF); // Low Byte
+            line += " ";
+            line += String(humi);
+            line += " ";
+            line += String(bat);
+            line += "\r\n";
+        } else {
+            // LaCrosseGateway KVP/ASCII-Format: "OK 9 <ID> <CH> <TEMP*10> <HUMI> <BAT>"
+            line  = "OK 9 ";
+            line += String(displayID);
+            line += " ";
+            line += String(f->channel);
+            line += " ";
+            line += String((int)(f->temp * 10));
+            line += " ";
+            line += String(humi);
+            line += " ";
+            line += String(bat);
+            line += "\r\n";
+        }
 
+    FHEMConnector::sendSensorData(line);  // ← TCP + Serial
     } else {
         // ── Normal-Modus: bisherige Debug-Ausgabe ────────────────────
         DisplayRaw(last[f->ID], "Sensor ", data, FRAME_LENGTH, f->rssi, f->rate);

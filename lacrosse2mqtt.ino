@@ -160,7 +160,6 @@ bool mqtt_server_set = false;
 void setup_mqtt_with_will()
 {
     String statusTopic = pub_base + "status";
-    
     if (mqtt_server_set) {
         const char *user = NULL;
         const char *pass = NULL;
@@ -168,14 +167,15 @@ void setup_mqtt_with_will()
             user = config.mqtt_user.c_str();
             pass = config.mqtt_pass.c_str();
         }
-        
-        if (mqtt_client.connect(mqtt_id.c_str(), user, pass, 
+        if (mqtt_client.connect(mqtt_id.c_str(), user, pass,
                                 statusTopic.c_str(), 0, true, "offline")) {
             Serial.println("MQTT Connected with LWT");
+            logAppend("SYS: MQTT verbunden (LWT aktiv)");
             mqtt_client.publish(statusTopic.c_str(), "online", true);
-            
             for (int i = 0; i < SENSOR_NUM; i++)
                 hass_cfg[i] = 0;
+        } else {
+            logAppend("SYS: MQTT Verbindung fehlgeschlagen");
         }
     }
 }
@@ -261,6 +261,7 @@ void check_repeatedjobs()
     }
     if (config.changed) {
         Serial.println("MQTT config changed. Dis- and reconnecting...");
+        logAppend("SYS: MQTT config changed. Dis- and reconnecting...");
         config.changed = false;
         if (mqtt_ok) {
             String statusTopic = pub_base + "status";
@@ -297,14 +298,18 @@ void check_repeatedjobs()
             if (mqtt_client.connect(mqtt_id.c_str(), user, pass, 
                                    statusTopic.c_str(), 0, true, "offline")) {
                 Serial.println("OK!");
+                logAppend("SYS: MQTT connected OK");
                 
                 mqtt_client.publish(statusTopic.c_str(), "online", true);
                 Serial.println("Published status: online");
+                logAppend("SYS: MQTT connected online");
                 
                 for (int i = 0; i < SENSOR_NUM; i++)
                     hass_cfg[i] = 0;
-            } else
-                Serial.println("FAILED");
+            } else {
+               Serial.println("FAILED");
+                logAppend("SYS: MQTT reconnect FAILED");
+            }
         }
         last_reconnect = now;
     }
@@ -863,7 +868,15 @@ void receive()
         Serial.print(rssi);
         Serial.print(" Rate:");
         Serial.println(rate);
-    }
+        String hexLine = "SYS: RAW:";
+            for (int i = 0; i < payLoadSize; i++) {
+                hexLine += " ";
+                if (payload[i] < 16) hexLine += "0";
+                hexLine += String(payload[i], HEX);
+            }
+            hexLine += " RSSI:" + String(rssi) + " Rate:" + String(rate);
+            logAppend(hexLine);
+        }
 
     bool frame_valid = false;
     LaCrosse::Frame lacrosse_frame;
@@ -917,6 +930,17 @@ void receive()
         }
         
         LaCrosse::DisplayFrame(payload, &lacrosse_frame);
+
+        {
+            String dataLog = "DATA: LaCrosse ID=" + String(ID) +
+                             " Ch=" + String(channel) +
+                             " T=" + String(lacrosse_frame.temp, 1) + "°C" +
+                             " H=" + String(lacrosse_frame.humi) + "%" +
+                             " Bat=" + String(lacrosse_frame.batlo ? "LOW" : "OK") +
+                             " RSSI=" + String(rssi) +
+                             " Rate=" + String(rate);
+            logAppend(dataLog);
+        }
 
         // FHEM connector
         if (FHEMConnector::isEnabled()) {
@@ -1042,6 +1066,10 @@ void setup(void)
     if (!littlefs_ok)
         Serial.println("LittleFS Mount Failed");
     setup_web();
+
+    logAppend("SYS: LaCrosse2MQTT gestartet");
+    logAppend("SYS: IP: " + WiFi.localIP().toString());
+    logAppend("SYS: MQTT-ID: " + mqtt_id);
 
     if (config.debug_mode) {
         Serial.println("Debug Mode ENABLED");

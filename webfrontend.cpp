@@ -24,6 +24,30 @@ DebugEntry debug_log[DEBUG_LOG_SIZE];
 int debug_log_index = 0;
 unsigned long debug_log_counter = 0;
 
+#define TEXT_LOG_SIZE 4096
+static char   textLogBuffer[TEXT_LOG_SIZE];
+static int    textLogHead = 0;
+static int    textLogTail = 0;
+
+void logAppend(const String& line) {
+    String entry = line + "\n";
+    for (char c : entry) {
+        textLogBuffer[textLogHead] = c;
+        textLogHead = (textLogHead + 1) % TEXT_LOG_SIZE;
+        if (textLogHead == textLogTail)
+            textLogTail = (textLogTail + 1) % TEXT_LOG_SIZE;
+    }
+}
+
+String logGetNew() {
+    String result;
+    while (textLogTail != textLogHead) {
+        result += textLogBuffer[textLogTail];
+        textLogTail = (textLogTail + 1) % TEXT_LOG_SIZE;
+    }
+    return result;
+}
+
 void add_debug_log(uint8_t *data, int8_t rssi, int datarate, bool valid) {
     if (!config.debug_mode) return;
     debug_log[debug_log_index].timestamp = millis();
@@ -331,16 +355,12 @@ bool save_idmap()
             continue;
         String fullname = String("/idmap/") + String((i < 0x10)?"0":"") + String(i, HEX);
         if (LittleFS.exists(fullname)) {
-            //Serial.println("Exists: " + fullname);
             File comp = LittleFS.open(fullname);
             if (comp) {
-                //Serial.println("open: " + fullname);
                 String tmp = read_file(comp);
                 comp.close();
-                //Serial.print("tmp:");Serial.print(tmp);Serial.println("'");
-                //Serial.print("id2:");Serial.print(id2name[i]);Serial.println("'");
                 if (tmp == id2name[i])
-                    continue; /* skip unchanged settings */
+                    continue;
             }
         }
         Serial.println("Writing file " +fullname+" content: " + id2name[i]);
@@ -360,7 +380,7 @@ void handle_check_update() {
     if (updateCheckInProgress) {
         response = "{\"status\":\"checking\"}";
     } else {
-        bool success = checkForUpdate(false);  // Versuche zuerst mit Certificate Bundle
+        bool success = checkForUpdate(false);
         
         if (success) {
             JsonDocument doc;
@@ -407,7 +427,6 @@ void handle_install_update() {
     
     server.send(200, "application/json", "{\"status\":\"started\",\"message\":\"Update installation started\"}");
     
-    // Starte Update in separatem Task
     installUpdate();
 }
 
@@ -424,7 +443,6 @@ void handle_install_update_insecure() {
     
     server.send(200, "application/json", "{\"status\":\"started\",\"message\":\"Update installation started (insecure mode)\"}");
     
-    // Starte Update mit forceInsecure=true
     installUpdate(true);
 }
 
@@ -444,7 +462,6 @@ void handle_check_update_insecure() {
     if (updateCheckInProgress) {
         response = "{\"status\":\"checking\"}";
     } else {
-        // Rufe checkForUpdate mit forceInsecure=true auf
         bool success = checkForUpdate(true);
         
         if (success) {
@@ -859,7 +876,7 @@ static void add_header(String &s, const String &title)
 s += "<script>"
 "let autoRefreshEnabled=true,refreshInterval=5000,refreshTimer;"
 
-// KORRIGIERTE updateSensorData() Funktion
+// updateSensorData() Funktion
 "function updateSensorData(){"
 "if(!autoRefreshEnabled)return;"
 "fetch('/sensors.json').then(r=>r.json()).then(data=>{"
@@ -1773,6 +1790,42 @@ s += "<script>"
         "font-weight: 500; "
     "}";
 
+    s += ".logbox {"
+         "width:100%;"
+         "height:300px;"
+         "overflow-y:auto;"
+         "background-color:var(--secondary-background-color);"
+         "border:1px solid var(--divider-color);"
+         "border-radius:4px;"
+         "padding:8px;"
+         "font-family:'Roboto Mono','Courier New',monospace;"
+         "font-size:12px;"
+         "color:var(--primary-text-color);"
+         "box-sizing:border-box;"
+         "}";
+    s += ".logLine, .dataLine {"
+         "display:block;"
+         "padding:1px 0;"
+         "border-bottom:1px solid var(--divider-color);"
+         "word-break:break-all;"
+         "}";
+    s += ".info {"
+         "font-size:12px;"
+         "color:var(--secondary-text-color);"
+         "margin-left:8px;"
+         "}";
+    s += "#commandText {"
+         "width:70%;"
+         "padding:6px 8px;"
+         "margin:4px 4px 0 0;"
+         "border:1px solid var(--divider-color);"
+         "border-radius:4px;"
+         "background-color:var(--secondary-background-color);"
+         "color:var(--primary-text-color);"
+         "font-size:13px;"
+         "font-family:inherit;"
+         "}";
+
     // Styles für Datenrate-Highlighting =====
     s += ".info-item-highlight {\n";
     s += "  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n";
@@ -1897,6 +1950,7 @@ static void add_sysinfo_footer(String &s)
          "<p>"
          "<a href='/'>Home</a> | "
          "<a href='config.html'>Configuration</a> | "
+         "<a href='log'>Log</a> | "
          "<a href='update'>Update</a> | "
          "<a href='licenses.html'>Licenses</a> | "
          "<a href='https://github.com/steigerbalett/lacrosse2mqtt' target='_blank'>Powered by LaCrosse2MQTT</a>"
@@ -1977,6 +2031,7 @@ void handle_index()
     index += "<h2>Quick Actions</h2>";
     index += "<div class='action-buttons'>";
     index += "<a href='/config.html' class='action-button'>⚙️ Configuration</a>";
+    index += "<a href='/log' class='action-button'>📋 Live Log</a>";
     if (config.debug_mode) {
         index += "<a href='/debug.html' class='action-button action-button-warning'>🐛 Debug Log</a>";
     }
@@ -2640,6 +2695,7 @@ if (any_active && interval_sec > 0) {
     resp += "<h2>Actions</h2>";
     resp += "<div class='action-buttons'>";
     resp += "<a href='/update' class='action-button'>📦 Local Firmware update</a>";
+    resp += "<a href='/log' class='action-button'>📋 Live Log</a>";
     if (config.debug_mode) {
         resp += "<a href='/debug.html' class='action-button action-button-warning'>🐛 Debug Log</a>";
     }
@@ -3358,6 +3414,133 @@ void handle_update_page() {
     server.send(200, "text/html", page);
 }
 
+void handle_log() {
+    String page;
+    add_header(page, "Live Log");
+
+    page += "<div class='card' style='margin-bottom:12px'>";
+    page += "<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>";
+    page += "<h2 style='margin:0'>📋 Live Log</h2>";
+    page += "<a href='/' class='action-button' style='font-size:11px;padding:6px 12px'>🏠 Home</a>";
+    page += "</div>";
+    page += "</div>";
+
+    page += "<script>"
+            "function sendCommand(){"
+            "var cmd=document.getElementById('commandText').value;"
+            "if(!cmd)return;"
+            "var r=new XMLHttpRequest();"
+            "r.open('GET', 'command?cmd=' + encodeURIComponent(cmd), true);"
+            "r.send();"
+            "document.getElementById('commandText').value = '';"
+            "};"
+            "function clearList(what){"
+            "document.getElementById(what+'Div').innerHTML='';"
+            "filter(what);"
+            "};"
+            "function filter(what){"
+            "var el=document.getElementById(what+'DivFilter');"
+            "var text0=el.value.toLowerCase();"
+            "var elements=document.getElementsByClassName(what+'Line');"
+            "var ct=0;"
+            "for(var i=0;i<elements.length;i++){"
+            "if(elements[i].innerHTML.toLowerCase().indexOf(text0)==-1){"
+            "elements[i].style.display='none';"
+            "}else{elements[i].style.display='block';ct++;}"
+            "}"
+            "document.getElementById(what+'RowCount').innerHTML=ct+' rows';"
+            "};"
+            "function run(){"
+            "document.getElementById('logDivFilter').onkeyup=function(){filter('log');};"
+            "document.getElementById('dataDivFilter').onkeyup=function(){filter('data');};"
+            "document.getElementById('commandText').addEventListener('keydown',function(e){"
+            "if(e.keyCode===13)sendCommand();});"
+            "getLogData();"
+            "};"
+            "function getLogData(){"
+            "if(document.getElementById('enabled').checked===true){"
+            "var r=new XMLHttpRequest();"
+            "r.onreadystatechange=function(){"
+            "if(this.readyState===4&&this.status===200&&this.responseText!=null&&this.responseText!=''){"
+            "var lines=this.responseText.split('\\n');"
+            "for(var i=0;i<lines.length;i++){"
+            "var txt=lines[i];"
+            "if(txt!=''){"
+            "if(txt==='SYS: ***CLEARLOG***'){clearList('data');clearList('log');}"
+            "else{"
+            "var targetDiv='logDiv',scrollCB='scrollLogDiv',prefix='log';"
+            "if(txt.startsWith('DATA:')){"
+            "prefix='data';targetDiv='dataDiv';scrollCB='scrollDataDiv';"
+            "txt=txt.substring(5);"
+            "}"
+            "if(txt.startsWith('SYS:'))txt=txt.substring(4);"
+            "txt=new Date().toLocaleTimeString('de-DE')+': '+txt;"
+            "document.getElementById(targetDiv).innerHTML+="
+            "\"<div class='\"+prefix+\"Line'>\"+txt+'</div>';"
+            "filter(prefix);"
+            "if(document.getElementById(scrollCB).checked===true){"
+            "var d=document.getElementById(targetDiv);"
+            "d.scrollTop=d.scrollHeight;"
+            "}"
+            "}"
+            "}"
+            "}"
+            "}"
+            "};"
+            "r.open('GET','getLogData?nc='+Math.random(),true);"
+            "r.send();"
+            "}"
+            "setTimeout('getLogData()',500);"
+            "};"
+            "</script>"
+            "<body onload='run()'>";
+
+    // Befehlszeile
+    page += "<div class='card' style='margin-bottom:12px'>";
+    page += "<h3>⌨️ Command</h3>";
+    page += "<input id='commandText' placeholder='Enter command...'>";
+    page += "<button type='button' onclick='sendCommand()'>Send</button>";
+    page += "&nbsp;&nbsp;<input type='checkbox' id='enabled' value='true' checked> Logging active";
+    page += "</div>";
+
+    // Empfangene Daten
+    page += "<div class='card' style='margin-bottom:12px'>";
+    page += "<h3>📡 Received Data</h3>";
+    page += "<input type='checkbox' id='scrollDataDiv' value='true' checked> Auto-scroll";
+    page += "&nbsp;<button type='button' onclick=\"clearList('data')\">Clear</button>";
+    page += "&nbsp;Filter: <input id='dataDivFilter' style='width:150px;padding:4px 6px'>";
+    page += "<span id='dataRowCount' class='info'></span>";
+    page += "<div id='dataDiv' class='logbox'></div>";
+    page += "</div>";
+
+    // Debug Log
+    page += "<div class='card'>";
+    page += "<h3>🔍 Debug Log</h3>";
+    page += "<input type='checkbox' id='scrollLogDiv' value='true' checked> Auto-scroll";
+    page += "&nbsp;<button type='button' onclick=\"clearList('log')\">Clear</button>";
+    page += "&nbsp;Filter: <input id='logDivFilter' style='width:150px;padding:4px 6px'>";
+    page += "<span id='logRowCount' class='info'></span>";
+    page += "<div id='logDiv' class='logbox'></div>";
+    page += "</div>";
+
+    add_sysinfo_footer(page);
+    server.send(200, "text/html", page);
+}
+
+void handle_get_log_data() {
+    server.send(200, "text/plain", logGetNew());
+}
+
+void handle_command() {
+    String cmd = server.arg("cmd");
+    if (cmd.length() > 0) {
+        logAppend("SYS: CMD: " + cmd);
+        // Optional: Serial weiterleiten
+        Serial.println("WEB CMD: " + cmd);
+    }
+    server.send(200, "text/plain", "OK");
+}
+
 void setup_web()
 {
     if (!load_idmap())
@@ -3379,6 +3562,9 @@ void setup_web()
     server.on("/update-progress", handle_update_progress);
     server.on("/api/reboot", HTTP_POST, handle_api_reboot);
     server.on("/api/system", handle_api_system);
+    server.on("/log",        handle_log);
+    server.on("/getLogData", handle_get_log_data);
+    server.on("/command",    handle_command);
     
     server.onNotFound([]() {
         server.send(404, "text/plain", "The content you are looking for was not found.\n");
