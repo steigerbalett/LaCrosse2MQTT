@@ -778,7 +778,7 @@ void handle_sensors_json() {
         
         JsonObject sensor = sensors.add<JsonObject>();
         sensor["id"] = fcache[i].ID;
-        sensor["id_hex"] = formatRawIdHex(fcache[i].ID);
+        sensor["id_hex"] = formatHexId(fcache[i].ID);
         sensor["ch"] = fcache[i].channel;
         sensor["type"] = String(fcache[i].sensorType);
         sensor["temp"] = serialized(String(fcache[i].temp, 1));
