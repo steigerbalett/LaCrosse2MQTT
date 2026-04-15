@@ -7,6 +7,7 @@
 #include <rom/rtc.h>
 #include "WiFi.h"
 #include "update_check.h"
+#include "fhem_connector.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -22,6 +23,30 @@ struct DebugEntry {
 DebugEntry debug_log[DEBUG_LOG_SIZE];
 int debug_log_index = 0;
 unsigned long debug_log_counter = 0;
+
+#define TEXT_LOG_SIZE 4096
+static char   textLogBuffer[TEXT_LOG_SIZE];
+static int    textLogHead = 0;
+static int    textLogTail = 0;
+
+void logAppend(const String& line) {
+    String entry = line + "\n";
+    for (char c : entry) {
+        textLogBuffer[textLogHead] = c;
+        textLogHead = (textLogHead + 1) % TEXT_LOG_SIZE;
+        if (textLogHead == textLogTail)
+            textLogTail = (textLogTail + 1) % TEXT_LOG_SIZE;
+    }
+}
+
+String logGetNew() {
+    String result;
+    while (textLogTail != textLogHead) {
+        result += textLogBuffer[textLogTail];
+        textLogTail = (textLogTail + 1) % TEXT_LOG_SIZE;
+    }
+    return result;
+}
 
 void add_debug_log(uint8_t *data, int8_t rssi, int datarate, bool valid) {
     if (!config.debug_mode) return;
@@ -41,6 +66,12 @@ extern float cpu_usage;
 
 static WebServer server(80);
 static HTTPUpdateServer httpUpdater;
+
+static String formatHexId(uint8_t id) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%X", id & 0x3F);
+    return String(buf);
+}
 
 int name2id(const char *fname, const int start = 0)
 {
@@ -134,6 +165,8 @@ bool load_config()
     config.proto_hp1000 = false;
     config.proto_wh65b = false;    
     config.toggle_interval_ms = 20000; /* default: 20 Sekunden */
+    config.fhem_mode = false;
+    config.fhem_format = false;
 
     if (!littlefs_ok)
         return false;
@@ -173,6 +206,10 @@ bool load_config()
         if (!doc["mqtt_use_names"].isNull()) {
             config.mqtt_use_names = doc["mqtt_use_names"];
         }
+        if (!doc["fhem_mode"].isNull())
+            config.fhem_mode = doc["fhem_mode"];
+        if (!doc["fhem_format"].isNull())
+            config.fhem_format = doc["fhem_format"];
         if (!doc["proto_lacrosse"].isNull())
             config.proto_lacrosse = doc["proto_lacrosse"];
         if (!doc["proto_wh1080"].isNull())
@@ -210,6 +247,7 @@ bool load_config()
         Serial.println("ha_discovery: " + String(config.ha_discovery));
         Serial.println("display_on: " + String(config.display_on));
         Serial.println("debug_mode: " + String(config.debug_mode));
+        Serial.println("fhem_mode: " + String(config.fhem_mode));
         Serial.println("screensaver_mode: " + String(config.screensaver_mode));
         Serial.println("proto_lacrosse: " + String(config.proto_lacrosse));
         Serial.println("proto_wh1080: " + String(config.proto_wh1080));
@@ -253,6 +291,7 @@ bool save_config()
     doc["debug_mode"] = config.debug_mode;
     doc["screensaver_mode"] = config.screensaver_mode;
     doc["mqtt_use_names"] = config.mqtt_use_names;
+    doc["fhem_mode"] = config.fhem_mode;
     doc["proto_lacrosse"] = config.proto_lacrosse;
     doc["proto_wh1080"] = config.proto_wh1080;
     doc["proto_tx38it"] = config.proto_tx38it;
@@ -267,9 +306,10 @@ bool save_config()
     doc["proto_hp1000"] = config.proto_hp1000;
     doc["proto_wh65b"] = config.proto_wh65b;
     doc["toggle_interval_ms"] = config.toggle_interval_ms;
+    doc["fhem_format"] = config.fhem_format;
     
     if (serializeJson(doc, cfg) == 0) {
-        Serial.println("FFailed to write config.json");
+        Serial.println("Failed to write config.json");
         ret = false;
     }
     
@@ -320,16 +360,12 @@ bool save_idmap()
             continue;
         String fullname = String("/idmap/") + String((i < 0x10)?"0":"") + String(i, HEX);
         if (LittleFS.exists(fullname)) {
-            //Serial.println("Exists: " + fullname);
             File comp = LittleFS.open(fullname);
             if (comp) {
-                //Serial.println("open: " + fullname);
                 String tmp = read_file(comp);
                 comp.close();
-                //Serial.print("tmp:");Serial.print(tmp);Serial.println("'");
-                //Serial.print("id2:");Serial.print(id2name[i]);Serial.println("'");
                 if (tmp == id2name[i])
-                    continue; /* skip unchanged settings */
+                    continue;
             }
         }
         Serial.println("Writing file " +fullname+" content: " + id2name[i]);
@@ -349,7 +385,7 @@ void handle_check_update() {
     if (updateCheckInProgress) {
         response = "{\"status\":\"checking\"}";
     } else {
-        bool success = checkForUpdate(false);  // Versuche zuerst mit Certificate Bundle
+        bool success = checkForUpdate(false);
         
         if (success) {
             JsonDocument doc;
@@ -396,8 +432,7 @@ void handle_install_update() {
     
     server.send(200, "application/json", "{\"status\":\"started\",\"message\":\"Update installation started\"}");
     
-    // Starte Update in separatem Task
-    installUpdate();
+    xTaskCreate([](void*){ installUpdate(false); vTaskDelete(NULL); }, "OTA_Task", 16384, NULL, 1, NULL);
 }
 
 void handle_install_update_insecure() {
@@ -413,8 +448,7 @@ void handle_install_update_insecure() {
     
     server.send(200, "application/json", "{\"status\":\"started\",\"message\":\"Update installation started (insecure mode)\"}");
     
-    // Starte Update mit forceInsecure=true
-    installUpdate(true);
+    xTaskCreate([](void*){ installUpdate(true); vTaskDelete(NULL); }, "OTA_Task", 16384, NULL, 1, NULL);
 }
 
 void handle_update_progress() {
@@ -433,7 +467,6 @@ void handle_check_update_insecure() {
     if (updateCheckInProgress) {
         response = "{\"status\":\"checking\"}";
     } else {
-        // Rufe checkForUpdate mit forceInsecure=true auf
         bool success = checkForUpdate(true);
         
         if (success) {
@@ -508,6 +541,7 @@ void add_current_table(String &s, bool rawdata)
     s += "<table id='sensor-table'>\n";
     s += "<thead><tr>";
     s += "<th>ID</th>";
+    s += "<th>(ID Hex)</th>";
     s += "<th>Ch</th>";
     s += "<th>Type</th>";
     s += "<th>Temperature</th>";
@@ -570,6 +604,8 @@ void add_current_table(String &s, bool rawdata)
         
         // ID
         s += "<td>" + String(displayID) + "</td>";
+        // ID im Headezimal Format
+        s += "<td>" + formatHexId(displayID) + "</td>";
         
         // Channel
         s += "<td>" + String(fcache[i].channel) + "</td>";
@@ -741,6 +777,7 @@ void handle_sensors_json() {
         
         JsonObject sensor = sensors.add<JsonObject>();
         sensor["id"] = fcache[i].ID;
+        sensor["id_hex"] = formatHexId(fcache[i].ID);
         sensor["ch"] = fcache[i].channel;
         sensor["type"] = String(fcache[i].sensorType);
         sensor["temp"] = serialized(String(fcache[i].temp, 1));
@@ -828,6 +865,10 @@ void handle_sensors_json() {
     doc["wifi_ip"] = WiFi.localIP().toString();
     doc["cpu_usage"] = serialized(String(cpu_usage, 1));
     doc["current_datarate"] = get_current_datarate();
+    doc["fhem_clients"] = FHEMConnector::getActiveClientCount();
+    doc["fhem_enabled"] = config.fhem_mode;
+    doc["fhem_format"] = config.fhem_format ? "jeelink" : "lacrossegateway";
+    doc["fhem_format_name"] = FHEMConnector::getCurrentFormatName();
     
     String output;
     serializeJson(doc, output);
@@ -844,7 +885,7 @@ static void add_header(String &s, const String &title)
 s += "<script>"
 "let autoRefreshEnabled=true,refreshInterval=5000,refreshTimer;"
 
-// KORRIGIERTE updateSensorData() Funktion
+// updateSensorData() Funktion
 "function updateSensorData(){"
 "if(!autoRefreshEnabled)return;"
 "fetch('/sensors.json').then(r=>r.json()).then(data=>{"
@@ -857,7 +898,7 @@ s += "<script>"
 
 // Tabellen-Header
 "const t=document.getElementById('sensor-table');if(t){const h=t.querySelector('thead tr');if(h){"
-"let hh='<th>ID</th><th>Ch</th><th>Type</th><th>Temperature</th>';"
+"let hh='<th>ID</th><th>ID HEX</th><th>Ch</th><th>Type</th><th>Temperature</th>';"
 "if(hasTempCh2)hh+='<th>Temp 2</th>';if(hasHumidity)hh+='<th>Humidity</th>';"
 "if(hasWindSpeed)hh+='<th>Wind Speed</th>';if(hasWindDir)hh+='<th>Wind Dir</th>';"
 "if(hasWindGust)hh+='<th>Wind Gust</th>';if(hasRain)hh+='<th>Rain</th>';"
@@ -867,7 +908,7 @@ s += "<script>"
 
 // Tabellen-Body
 "const b=document.getElementById('sensor-tbody');if(b){b.innerHTML='';data.sensors.forEach(s=>{"
-"const r=b.insertRow();let rh='<td>'+s.id+'</td><td>'+s.ch+'</td><td>'+s.type+'</td><td>'+s.temp+' °C</td>';"
+"const r=b.insertRow();let rh='<td>'+s.id+'</td><td>'+s.id_hex+'</td><td>'+s.ch+'</td><td>'+s.type+'</td><td>'+s.temp+' °C</td>';"
 "if(hasTempCh2)rh+='<td>'+(s.temp2!==null?s.temp2+' °C':'-')+'</td>';"
 "if(hasHumidity)rh+='<td>'+(s.humi>0&&s.humi<=100?s.humi+' %':'-')+'</td>';"
 "if(hasWindSpeed)rh+='<td>'+(s.wind_speed!==null?s.wind_speed+' km/h':'-')+'</td>';"
@@ -1201,6 +1242,15 @@ s += "<script>"
 "alert('Update failed!');"
 "document.getElementById('update-progress-container').style.display='none';"
 "});}"
+
+// FHEM Client Status aktualisieren
+"const fhemStatus=document.getElementById('fhem-status');"
+"if(fhemStatus&&data.fhem_clients!==undefined){"
+"if(data.fhem_clients===0){"
+"fhemStatus.innerHTML=\"<span class='status-badge status-error'>Keine Verbindung</span>\";"
+"}else{"
+"fhemStatus.innerHTML=\"<span class='status-badge status-ok'>✓ \"+data.fhem_clients+\" Verbindung(en)</span>\";"
+"}}"
 
 "</script>";
     }
@@ -1749,6 +1799,42 @@ s += "<script>"
         "font-weight: 500; "
     "}";
 
+    s += ".logbox {"
+         "width:100%;"
+         "height:300px;"
+         "overflow-y:auto;"
+         "background-color:var(--secondary-background-color);"
+         "border:1px solid var(--divider-color);"
+         "border-radius:4px;"
+         "padding:8px;"
+         "font-family:'Roboto Mono','Courier New',monospace;"
+         "font-size:12px;"
+         "color:var(--primary-text-color);"
+         "box-sizing:border-box;"
+         "}";
+    s += ".logLine, .dataLine {"
+         "display:block;"
+         "padding:1px 0;"
+         "border-bottom:1px solid var(--divider-color);"
+         "word-break:break-all;"
+         "}";
+    s += ".info {"
+         "font-size:12px;"
+         "color:var(--secondary-text-color);"
+         "margin-left:8px;"
+         "}";
+    s += "#commandText {"
+         "width:70%;"
+         "padding:6px 8px;"
+         "margin:4px 4px 0 0;"
+         "border:1px solid var(--divider-color);"
+         "border-radius:4px;"
+         "background-color:var(--secondary-background-color);"
+         "color:var(--primary-text-color);"
+         "font-size:13px;"
+         "font-family:inherit;"
+         "}";
+
     // Styles für Datenrate-Highlighting =====
     s += ".info-item-highlight {\n";
     s += "  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n";
@@ -1873,6 +1959,7 @@ static void add_sysinfo_footer(String &s)
          "<p>"
          "<a href='/'>Home</a> | "
          "<a href='config.html'>Configuration</a> | "
+         "<a href='log'>Log</a> | "
          "<a href='update'>Update</a> | "
          "<a href='licenses.html'>Licenses</a> | "
          "<a href='https://github.com/steigerbalett/lacrosse2mqtt' target='_blank'>Powered by LaCrosse2MQTT</a>"
@@ -1953,6 +2040,7 @@ void handle_index()
     index += "<h2>Quick Actions</h2>";
     index += "<div class='action-buttons'>";
     index += "<a href='/config.html' class='action-button'>⚙️ Configuration</a>";
+    index += "<a href='/log' class='action-button'>📋 Live Log</a>";
     if (config.debug_mode) {
         index += "<a href='/debug.html' class='action-button action-button-warning'>🐛 Debug Log</a>";
     }
@@ -2206,6 +2294,11 @@ void handle_config() {
     static unsigned long token = millis();
     static bool just_saved = false;
     
+//    if (server.hasArg("fhem_format")) {
+//        config.fhem_format = server.arg("fhem_format") == "1";
+//        config.changed = true;
+//        config_changed = true;
+//    }
     if (server.hasArg("id") && server.hasArg("name")) {
         String _id = server.arg("id");
         String name = server.arg("name");
@@ -2239,15 +2332,6 @@ void handle_config() {
         config.changed = true;
         config_changed = true;
     }
-    if (server.hasArg("save")) {
-        if (server.arg("save") == String(token)) {
-            Serial.println("SAVE!");
-            save_idmap();
-            save_config();
-            config_changed = false;
-            just_saved = true;
-        }
-    }
     if (server.hasArg("debug_mode")) {
         String _on = server.arg("debug_mode");
         int tmp = _on.toInt();
@@ -2255,6 +2339,30 @@ void handle_config() {
             config_changed = true;
             config.debug_mode = tmp;
             Serial.println("Debug mode changed to: " + String(config.debug_mode));
+        }
+    }
+    if (server.hasArg("fhem_mode")) {
+        String fhem_val = server.arg("fhem_mode");
+        bool new_fhem = (fhem_val == "1");
+        if (new_fhem != config.fhem_mode) {
+            config.fhem_mode = new_fhem;
+            config_changed = true;
+            config.changed = true;
+            if (new_fhem) {
+                FHEMConnector::setFormat(config.fhem_format);
+                FHEMConnector::initTCPServer();
+            }
+            Serial.println("FHEM mode CHANGED to: " + String(config.fhem_mode));
+        }
+    }
+    if (server.hasArg("fhem_format")) {
+        bool newFormat = server.arg("fhem_format") == "1";
+        if (newFormat != config.fhem_format) {
+            config.fhem_format = newFormat;
+            config.changed = true;
+            config_changed = true;
+            FHEMConnector::setFormat(newFormat);
+            Serial.println("FHEM Format: " + FHEMConnector::getCurrentFormatName());
         }
     }
     if (server.hasArg("screensaver_mode")) {
@@ -2437,7 +2545,18 @@ void handle_config() {
 
     }
 
-    token = millis();
+    // --- SAVE BLOCK (an das Ende verschoben) ---
+    String saveArg = server.arg("save");
+    if (server.hasArg("save") && saveArg == String(token)) {
+        save_idmap();
+        save_config();
+        config_changed = false;
+        just_saved = true;
+        Serial.println("SAVE!");
+    }
+    if (!just_saved) {
+        token = millis();
+    }
     
     String resp;
     add_header(resp, "LaCrosse2MQTT Configuration");
@@ -2456,6 +2575,11 @@ if (just_saved) {
 
     resp += "<div class='card-grid'>";
     
+
+    resp += "<div class='card card-full'>";
+    add_current_table(resp, true);
+    resp += "</div>";
+
     resp += "<div class='card'>";
     resp += "<h2>System Status</h2>";
     resp += "<p id='system-status'>";
@@ -2575,18 +2699,18 @@ if (any_active && interval_sec > 0) {
     resp += "<h2>Actions</h2>";
     resp += "<div class='action-buttons'>";
     resp += "<a href='/update' class='action-button'>📦 Local Firmware update</a>";
+    resp += "<a href='/log' class='action-button'>📋 Live Log</a>";
     if (config.debug_mode) {
         resp += "<a href='/debug.html' class='action-button action-button-warning'>🐛 Debug Log</a>";
     }
     resp += "<a href='/' class='action-button'>🏠 Main Page</a>";
     resp += "</div>";
 
-        resp += "<div class='info-row' style='margin-top:15px;'>";
+    resp += "<div class='info-row' style='margin-top:15px;'>";
     resp += "<button onclick='confirmReboot()' style='width:100%;padding:12px;background-color:#dc3545;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:all 0.3s ease;'>";
     resp += "🔄 Reboot";
     resp += "</button>";
-    resp += "</div>";
-    
+    resp += "</div>";    
     resp += "</div>";
 
     resp += "<div class='card'>";
@@ -2606,13 +2730,36 @@ if (any_active && interval_sec > 0) {
     resp += "</div>";
 
     resp += "</div>";
+
+        if (config_changed) {
+        resp += "<div class='card' style='background-color: rgba(255, 152, 0, 0.1); border: 1px solid var(--warning-color);'>";
+        resp += "<h3>⚠️ Unsaved Changes</h3>";
+        resp += "<p>You have unsaved configuration changes. Please save or reload to discard.</p>";
+        resp += "<form action='/config.html' style='display: inline; margin-right: 8px;'>";
+        resp += "<input type='hidden' name='save' value='" + String(token) + "'>";
+        resp += "<button type='submit' style='background-color: var(--success-color);'>💾 Save Configuration</button>";
+        resp += "</form>";
+        resp += "<form action='/config.html' style='display: inline;'>";
+        resp += "<input type='hidden' name='cancel' value='" + String(token) + "'>";
+        resp += "<button type='submit' style='background-color: var(--error-color);'>🔄 Discard Changes</button>";
+        resp += "</form>";
+        resp += "</div>";
+    }
     
-    resp += "<div class='card card-full'>";
-    add_current_table(resp, true);
+    if (!littlefs_ok) {
+        resp += "<div class='card' style='background-color: rgba(244, 67, 54, 0.1); border: 1px solid var(--error-color);'>";
+        resp += "<h3>❌ Filesystem Error</h3>";
+        resp += "<p><strong>LittleFS seems damaged. Saving will not work.</strong></p>";
+        resp += "<p>This will erase all saved configuration. Continue?</p>";
+        resp += "<form action='/config.html'>";
+        resp += "<input type='hidden' name='format' value='" + String(token) + "'>";
+        resp += "<button type='submit' style='background-color: var(--error-color);'>⚠️ Format Filesystem</button>";
+        resp += "</form>";
+        resp += "</div>";
+    }
+
     resp += "</div>";
-    
-    token = millis();
-    
+
     resp += "<div class='card-grid'>";
     
     resp += "<div class='card'>";
@@ -2640,33 +2787,6 @@ if (any_active && interval_sec > 0) {
     resp += "<button type='submit'>Update MQTT Settings</button>";
     resp += "</form>";
     resp += "</div>";
-    
-    if (config_changed) {
-        resp += "<div class='card' style='background-color: rgba(255, 152, 0, 0.1); border: 1px solid var(--warning-color);'>";
-        resp += "<h3>⚠️ Unsaved Changes</h3>";
-        resp += "<p>You have unsaved configuration changes. Please save or reload to discard.</p>";
-        resp += "<form action='/config.html' style='display: inline; margin-right: 8px;'>";
-        resp += "<input type='hidden' name='save' value='" + String(token) + "'>";
-        resp += "<button type='submit' style='background-color: var(--success-color);'>💾 Save Configuration</button>";
-        resp += "</form>";
-        resp += "<form action='/config.html' style='display: inline;'>";
-        resp += "<input type='hidden' name='cancel' value='" + String(token) + "'>";
-        resp += "<button type='submit' style='background-color: var(--error-color);'>🔄 Discard Changes</button>";
-        resp += "</form>";
-        resp += "</div>";
-    }
-    
-    if (!littlefs_ok) {
-        resp += "<div class='card' style='background-color: rgba(244, 67, 54, 0.1); border: 1px solid var(--error-color);'>";
-        resp += "<h3>❌ Filesystem Error</h3>";
-        resp += "<p><strong>LittleFS seems damaged. Saving will not work.</strong></p>";
-        resp += "<p>This will erase all saved configuration. Continue?</p>";
-        resp += "<form action='/config.html'>";
-        resp += "<input type='hidden' name='format' value='" + String(token) + "'>";
-        resp += "<button type='submit' style='background-color: var(--error-color);'>⚠️ Format Filesystem</button>";
-        resp += "</form>";
-        resp += "</div>";
-    }
     
     resp += "<div class='card'>";
     resp += "<h2>Display Settings</h2>";
@@ -2708,28 +2828,6 @@ if (any_active && interval_sec > 0) {
     resp += "  </div>";
     resp += "</div>";
     resp += "<button type='submit'>Update Home Assistant</button>";
-    resp += "</form>";
-    resp += "</div>";
-    
-    resp += "<div class='card'>";
-    resp += "<h2>Debug Settings</h2>";
-    resp += "<form action='/config.html'>";
-    resp += "<div class='radio-group'>";
-    resp += "  <div class='radio-item'>";
-    resp += "    <label>";
-    resp += "      <input type='radio' name='debug_mode' value='1'" + (config.debug_mode ? checked : "") + "/>";
-    resp += "      Enable Debug Mode";
-    resp += "    </label>";
-    resp += "    <div class='option-description'>Show RAW frame data in serial console for troubleshooting</div>";
-    resp += "  </div>";
-    resp += "  <div class='radio-item'>";
-    resp += "    <label>";
-    resp += "      <input type='radio' name='debug_mode' value='0'" + (!config.debug_mode ? checked : "") + "/>";
-    resp += "      Disable";
-    resp += "    </label>";
-    resp += "  </div>";
-    resp += "</div>";
-    resp += "<button type='submit'>Update Debug Mode</button>";
     resp += "</form>";
     resp += "</div>";
     
@@ -2781,6 +2879,90 @@ if (any_active && interval_sec > 0) {
     resp += "<button type=\"submit\">Update MQTT Topics</button>";
     resp += "</form>";
     resp += "</div>";
+
+    resp += "<div class='card'>";
+    resp += "<h2>Debug Settings</h2>";
+    resp += "<form action='/config.html'>";
+    resp += "<div class='radio-group'>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "      <input type='radio' name='debug_mode' value='1'" + (config.debug_mode ? checked : "") + "/>";
+    resp += "      Enable Debug Mode";
+    resp += "    </label>";
+    resp += "    <div class='option-description'>Show RAW frame data in serial console for troubleshooting</div>";
+    resp += "  </div>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "      <input type='radio' name='debug_mode' value='0'" + (!config.debug_mode ? checked : "") + "/>";
+    resp += "      Disable";
+    resp += "    </label>";
+    resp += "  </div>";
+    resp += "</div>";
+    resp += "<button type='submit'>Update Debug Mode</button>";
+    resp += "</form>";
+    resp += "</div>";    
+
+    resp += "<div class='card'>";
+    resp += "<h2>FHEM Mode</h2>";
+    resp += "<form action='/config.html'>";
+    resp += "<div class='radio-group'>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "<input type='radio' name='fhem_mode' value='1'" + (config.fhem_mode ? checked : "") + " />\n";
+    resp += "      Enable FHEM Mode";
+    resp += "    </label>";
+    resp += "    <div class='option-description'>Outputs LaCrosse frames as LaCrosseGateway-compatible lines on the serial port (OK 9 ...)</div>";
+    resp += "  </div>";
+    resp += "  <div class='radio-item'>";
+    resp += "    <label>";
+    resp += "      <input type='radio' name='fhem_mode' value='0'" + (!config.fhem_mode ? checked : "") + " />\n";
+    resp += "      Disable";
+    resp += "    </label>";
+    resp += "  </div>";
+    resp += "</div>";
+    resp += "<button type='submit'>Update FHEM Mode</button>";
+    resp += "</form>";
+    resp += "</div>";
+
+        if (config.fhem_mode) {
+    resp += "<div class='card'>";
+    resp += "<h2>📡 FHEM / Telnet</h2>";
+    resp += "<p>Status: " + FHEMConnector::getClientStatusHTML() + "</p>";
+    resp += "<p>Aktive: <strong>" + String(FHEMConnector::getActiveClientCount()) + " / 4</strong></p>";
+    resp += "<p>Format: <strong>" + FHEMConnector::getCurrentFormatName() + "</strong></p>";
+    resp += "<form action='/config.html'>";
+    resp += "<div class='radio-group'>";
+    resp += "<div class='radio-item'>";
+    resp += "<label>";
+    resp += "<input type='radio' name='fhem_format' value='1'" + (config.fhem_format ? checked : "") + "/>";
+    resp += "JeeLink (OK 9 ID Channel Temp...)";
+    resp += "</label>";
+    resp += "<div class='option-description'>";
+    resp += "FHEM:<br><code>define myLGW JeeLink " + WiFi.localIP().toString() + ":81</code><br>";
+    resp += "USB: <code>define myLGW JeeLink /dev/ttyUSB0@115200</code>";
+    resp += "</div>";
+    resp += "</div>";
+    resp += "<div class='radio-item'>";
+    resp += "<label>";
+    resp += "<input type='radio' name='fhem_format' value='0'" + (!config.fhem_format ? checked : "") + "/>";
+    resp += "LaCrosseGateway (ID Channel Temp...)";
+    resp += "</label>";
+    resp += "<div class='option-description'>";
+    resp += "FHEM:<br><code>define myLGW LaCrosseGateway " + WiFi.localIP().toString() + ":81</code>";
+    resp += "</div>";
+    resp += "</div>";
+    resp += "</div>";
+    resp += "<button type='submit' style='margin-top:8px;'>Update Format</button>";
+    resp += "</form>";
+    resp += "</div>";
+    } else {
+        // FHEM-Modus deaktiviert – kompakte Info
+        resp += "<div class='card'>";
+        resp += "<h2>📡 FHEM / Telnet</h2>";
+        resp += "<p><span class='status-badge status-warning'>⚠️ FHEM-Modus deaktiviert</span></p>";
+        resp += "<p class='info-text'>Aktiviere FHEM-Modus weiter unten um den TCP-Server zu starten.</p>";
+        resp += "</div>";
+    }
 
     resp += "<div class='card'>";
     resp += "<h2>⏱️ Protocol Switching Settings</h2>";
@@ -3232,6 +3414,133 @@ void handle_update_page() {
     server.send(200, "text/html", page);
 }
 
+void handle_log() {
+    String page;
+    add_header(page, "Live Log");
+
+    page += "<div class='card' style='margin-bottom:12px'>";
+    page += "<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>";
+    page += "<h2 style='margin:0'>📋 Live Log</h2>";
+    page += "<a href='/' class='action-button' style='font-size:11px;padding:6px 12px'>🏠 Home</a>";
+    page += "</div>";
+    page += "</div>";
+
+    page += "<script>"
+            "function sendCommand(){"
+            "var cmd=document.getElementById('commandText').value;"
+            "if(!cmd)return;"
+            "var r=new XMLHttpRequest();"
+            "r.open('GET', 'command?cmd=' + encodeURIComponent(cmd), true);"
+            "r.send();"
+            "document.getElementById('commandText').value = '';"
+            "};"
+            "function clearList(what){"
+            "document.getElementById(what+'Div').innerHTML='';"
+            "filter(what);"
+            "};"
+            "function filter(what){"
+            "var el=document.getElementById(what+'DivFilter');"
+            "var text0=el.value.toLowerCase();"
+            "var elements=document.getElementsByClassName(what+'Line');"
+            "var ct=0;"
+            "for(var i=0;i<elements.length;i++){"
+            "if(elements[i].innerHTML.toLowerCase().indexOf(text0)==-1){"
+            "elements[i].style.display='none';"
+            "}else{elements[i].style.display='block';ct++;}"
+            "}"
+            "document.getElementById(what+'RowCount').innerHTML=ct+' rows';"
+            "};"
+            "function run(){"
+            "document.getElementById('logDivFilter').onkeyup=function(){filter('log');};"
+            "document.getElementById('dataDivFilter').onkeyup=function(){filter('data');};"
+            "document.getElementById('commandText').addEventListener('keydown',function(e){"
+            "if(e.keyCode===13)sendCommand();});"
+            "getLogData();"
+            "};"
+            "function getLogData(){"
+            "if(document.getElementById('enabled').checked===true){"
+            "var r=new XMLHttpRequest();"
+            "r.onreadystatechange=function(){"
+            "if(this.readyState===4&&this.status===200&&this.responseText!=null&&this.responseText!=''){"
+            "var lines=this.responseText.split('\\n');"
+            "for(var i=0;i<lines.length;i++){"
+            "var txt=lines[i];"
+            "if(txt!=''){"
+            "if(txt==='SYS: ***CLEARLOG***'){clearList('data');clearList('log');}"
+            "else{"
+            "var targetDiv='logDiv',scrollCB='scrollLogDiv',prefix='log';"
+            "if(txt.startsWith('DATA:')){"
+            "prefix='data';targetDiv='dataDiv';scrollCB='scrollDataDiv';"
+            "txt=txt.substring(5);"
+            "}"
+            "if(txt.startsWith('SYS:'))txt=txt.substring(4);"
+            "txt=new Date().toLocaleTimeString('de-DE')+': '+txt;"
+            "document.getElementById(targetDiv).innerHTML+="
+            "\"<div class='\"+prefix+\"Line'>\"+txt+'</div>';"
+            "filter(prefix);"
+            "if(document.getElementById(scrollCB).checked===true){"
+            "var d=document.getElementById(targetDiv);"
+            "d.scrollTop=d.scrollHeight;"
+            "}"
+            "}"
+            "}"
+            "}"
+            "}"
+            "};"
+            "r.open('GET','getLogData?nc='+Math.random(),true);"
+            "r.send();"
+            "}"
+            "setTimeout('getLogData()',500);"
+            "};"
+            "</script>"
+            "<body onload='run()'>";
+
+    // Befehlszeile
+    page += "<div class='card' style='margin-bottom:12px'>";
+    page += "<h3>⌨️ Command</h3>";
+    page += "<input id='commandText' placeholder='Enter command...'>";
+    page += "<button type='button' onclick='sendCommand()'>Send</button>";
+    page += "&nbsp;&nbsp;<input type='checkbox' id='enabled' value='true' checked> Logging active";
+    page += "</div>";
+
+    // Empfangene Daten
+    page += "<div class='card' style='margin-bottom:12px'>";
+    page += "<h3>📡 Received Data</h3>";
+    page += "<input type='checkbox' id='scrollDataDiv' value='true' checked> Auto-scroll";
+    page += "&nbsp;<button type='button' onclick=\"clearList('data')\">Clear</button>";
+    page += "&nbsp;Filter: <input id='dataDivFilter' style='width:150px;padding:4px 6px'>";
+    page += "<span id='dataRowCount' class='info'></span>";
+    page += "<div id='dataDiv' class='logbox'></div>";
+    page += "</div>";
+
+    // Debug Log
+    page += "<div class='card'>";
+    page += "<h3>🔍 Debug Log</h3>";
+    page += "<input type='checkbox' id='scrollLogDiv' value='true' checked> Auto-scroll";
+    page += "&nbsp;<button type='button' onclick=\"clearList('log')\">Clear</button>";
+    page += "&nbsp;Filter: <input id='logDivFilter' style='width:150px;padding:4px 6px'>";
+    page += "<span id='logRowCount' class='info'></span>";
+    page += "<div id='logDiv' class='logbox'></div>";
+    page += "</div>";
+
+    add_sysinfo_footer(page);
+    server.send(200, "text/html", page);
+}
+
+void handle_get_log_data() {
+    server.send(200, "text/plain", logGetNew());
+}
+
+void handle_command() {
+    String cmd = server.arg("cmd");
+    if (cmd.length() > 0) {
+        logAppend("SYS: CMD: " + cmd);
+        // Optional: Serial weiterleiten
+        Serial.println("WEB CMD: " + cmd);
+    }
+    server.send(200, "text/plain", "OK");
+}
+
 void setup_web()
 {
     if (!load_idmap())
@@ -3253,6 +3562,9 @@ void setup_web()
     server.on("/update-progress", handle_update_progress);
     server.on("/api/reboot", HTTP_POST, handle_api_reboot);
     server.on("/api/system", handle_api_system);
+    server.on("/log",        handle_log);
+    server.on("/getLogData", handle_get_log_data);
+    server.on("/command",    handle_command);
     
     server.onNotFound([]() {
         server.send(404, "text/plain", "The content you are looking for was not found.\n");

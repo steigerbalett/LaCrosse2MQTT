@@ -33,6 +33,10 @@ On the config page, you can enter the hostname / IP of your MQTT broker. The top
    * `lacrosse/id_<ID>/temp`, `lacrosse/id_<ID>/humi` the same but per ID. Note that the ID may change after a battery change! Labels can be rearranged after a battery change for stable naming.
    * `lacrosse/id_<ID>/state` additional flags "low_batt", "init" (for new battery state), "RSSI" (signal), "baud" (data rate) as JSON string
 
+## FHEM Connector
+Set FHEM Mode in the settings to use the serial output from the gateway as a direct replacement for the original LaCrosseGateway (LGW)
+'define myLaCrosseGW LaCrosseGateway <IP-ADRESSE>:81'
+
 ## First upload
  * Open Chrome or any chromium based browser.
  * Download newest firmware (lacrose2mqtt.YYYY.XX.X.bin) at the [release page](https://github.com/steigerbalett/lacrosse2mqtt/releases).
@@ -67,9 +71,9 @@ The following libraries are needed for building (could all be installed via ardu
    * [Heltec Boards](https://resource.heltec.cn/download/package_heltec_esp32_index.json)
 
 ## Nice2have
- * Add FHEM connector
  * Avoid 0.000kbs decode
  * Avoid send ID data over MQTT if name is chosen
+ * Refractor Code
 
 ## Know problems
 

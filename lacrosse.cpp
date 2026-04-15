@@ -3,14 +3,14 @@
 *
 * .- [0] -. .- [1] -. .- [2] -. .- [3] -. .- [4] -.
 * SSSS.DDDD DDN_.TTTT TTTT.TTTT WHHH.HHHH CCCC.CCCC
-* | | | || | | | | | | || | | |
-* | | | || | | | | | | || | `--------- CRC
-* | | | || | | | | | | |`-------- humidity%
-* | | | || | | | | | | `---- weak battery
-* | | | || `--------------- Temperature BCD, T = X/10-40
-* | | | | `--- new battery
-* | | `-------- sensor ID
-* `---- start byte
+* |        |        |  | |    |        |        |
+* |        |        |  | |    |        |        `--------- CRC
+* |        |        |  | |    |        `------------------- humidity%
+* |        |        |  | |    `------------------- weak battery
+* |        |        |  `------------------------- Temperature BCD, T = X/10-40
+* |        |        `------------------- new battery
+* |        `--------------------------- sensor ID
+* `------------------------------------ start byte
 *
 * Special humidity values:
 * 0x6A (106): No humidity sensor (TX29-IT, TX35-IT)
@@ -24,6 +24,7 @@
 */
 #include "lacrosse.h"
 #include <Arduino.h>
+#include "fhem_connector.h"   // FHEM-Connector eingebunden
 
 #define LACROSSE_TX29_NOHUMIDSENSOR 0x6A
 #define LACROSSE_TX25_PROBE_FLAG    0x7D
@@ -83,7 +84,8 @@ bool LaCrosse::DecodeTX141Frame(byte *bytes, struct Frame *f)
     
     // CRC muss passen (toleranz ±1 wegen möglicher Bitfehler)
     if (abs((int)crc_calc - (int)bytes[4]) > 1) {
-        Serial.printf(" [CRC fail: calc=%02X got=%02X]", crc_calc, bytes[4]);
+        if (!config.fhem_mode)
+            Serial.printf(" [CRC fail: calc=%02X got=%02X]", crc_calc, bytes[4]);
         return false;
     }
     
@@ -129,9 +131,9 @@ bool LaCrosse::DecodeTX141Frame(byte *bytes, struct Frame *f)
     f->humi = -1;
     f->valid = true;
     
-    Serial.printf(" [TX141: A=%.1f B=%.1f C=%.1f D=%.1f -> %.1f]", 
-                  temp_a, temp_b, temp_c, temp_d, chosen_temp);
-    
+    if (!config.fhem_mode)
+        Serial.printf(" [TX141: A=%.1f B=%.1f C=%.1f D=%.1f -> %.1f]",
+                      temp_a, temp_b, temp_c, temp_d, chosen_temp);
     return true;
 }
 
@@ -178,28 +180,69 @@ bool LaCrosse::DisplayFrame(byte *data, struct Frame *f)
 {
     static unsigned long last[SENSOR_NUM];
     if (!f->valid) {
-        Serial.println("LaCrosse::DisplayFrame FRAME INVALID");
+        if (!config.fhem_mode)
+            Serial.println("LaCrosse::DisplayFrame FRAME INVALID");
         return false;
     }
 
     int displayID = f->ID;
 
-    DisplayRaw(last[f->ID], "Sensor ", data, FRAME_LENGTH, f->rssi, f->rate);
-    
-    Serial.printf(" ID%-3d Ch%d", displayID, f->channel);
-    Serial.printf(" Temp%-5.1f°C", f->temp);
-    Serial.printf(" init%d batlo%d", f->init, f->batlo);
-    
-    const char* sensor_type = GetSensorType(f);
-    
-    if (f->humi > 0 && f->humi <= 100) {
-        Serial.printf(" Humi%d%% (%s)", f->humi, sensor_type);
+    if (config.fhem_mode) {
+        int humi = (f->humi > 0 && f->humi <= 100) ? f->humi : 0;
+        int bat  = f->batlo ? 0 : 1;
+
+        String line;
+        if (FHEMConnector::isJeeLinkFormat()) {
+            // JeeLink-Format: "OK 9 <ID> <CH> <TEMP_HIGH> <TEMP_LOW> <HUMI> <BAT>"
+            int temp_int = (int)(f->temp * 10) + 1000;  // Offset wie JeeLink
+            line  = "OK 9 ";
+            line += String(displayID);
+            line += " ";
+            line += String(f->channel);
+            line += " ";
+            line += String(temp_int >> 8);   // High Byte
+            line += " ";
+            line += String(temp_int & 0xFF); // Low Byte
+            line += " ";
+            line += String(humi);
+            line += " ";
+            line += String(bat);
+            line += "\r\n";
+        } else {
+            // LaCrosseGateway KVP/ASCII-Format: "OK 9 <ID> <CH> <TEMP*10> <HUMI> <BAT>"
+            line  = "OK 9 ";
+            line += String(displayID);
+            line += " ";
+            line += String(f->channel);
+            line += " ";
+            line += String((int)(f->temp * 10));
+            line += " ";
+            line += String(humi);
+            line += " ";
+            line += String(bat);
+            line += "\r\n";
+        }
+
+    FHEMConnector::sendSensorData(line);  // ← TCP + Serial
     } else {
-        Serial.printf(" (%s)", sensor_type);
+        // ── Normal-Modus: bisherige Debug-Ausgabe ────────────────────
+        DisplayRaw(last[f->ID], "Sensor ", data, FRAME_LENGTH, f->rssi, f->rate);
+
+        Serial.printf(" ID%-3d Ch%d", displayID, f->channel);
+        Serial.printf(" Temp%-5.1f°C", f->temp);
+        Serial.printf(" init%d batlo%d", f->init, f->batlo);
+
+        const char* sensor_type = GetSensorType(f);
+
+        if (f->humi > 0 && f->humi <= 100) {
+            Serial.printf(" Humi%d%% (%s)", f->humi, sensor_type);
+        } else {
+            Serial.printf(" (%s)", sensor_type);
+        }
+
+        Serial.println();
     }
-    
-    Serial.println();
-    
+
     return true;
 }
 

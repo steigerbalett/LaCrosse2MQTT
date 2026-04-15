@@ -228,7 +228,9 @@ void SX127x::SetRate(int rate)
     WriteReg(REG_BITRATEMSB, br >> 8);
     WriteReg(REG_BITRATELSB, br);
     
-    Serial.printf("SetRate: %d bps (BR=0x%04X)\n", rate, (unsigned int)br);
+    if (!config.fhem_mode) {
+        Serial.printf("SetRate: %d bps (BR=0x%04X)\n", rate, (unsigned int)br);
+    }
 }
 
 void SX127x::NextDataRate(byte idx)
@@ -248,7 +250,9 @@ void SX127x::NextDataRate(byte idx)
                 if (idx_old > 2) idx_old = 0;
             }
             SetRate(rates[idx_old]);
-            Serial.printf("Data rate: %d bps\n", rates[idx_old]);
+            if (!config.fhem_mode) {
+                Serial.printf("Data rate: %d bps\n", rates[idx_old]);
+            }
             return;
         }
         
@@ -258,5 +262,7 @@ void SX127x::NextDataRate(byte idx)
     
     int rate = active_rates[current_rate_index];
     SetRate(rate);
-    Serial.printf("Data rate: %d bps (index %d/%d)\n", rate, current_rate_index, active_rate_count);
+    if (!config.fhem_mode) {
+        Serial.printf("Data rate: %d bps (index %d/%d)\n", rate, current_rate_index, active_rate_count);
+    }
 }

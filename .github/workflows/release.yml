@@ -84,8 +84,35 @@ jobs:
           files: lacrosse2mqtt.${{ github.ref_name }}.bin
           body: |
             ## LaCrosse2MQTT ${{ github.ref_name }}
-            
-            ### Installation Methods
+
+            Custom Firmware for Heltec WiFi LoRa 32 V2 to receive LaCrosse sensor data and publish them via MQTT
+            (Let's say it's some kind of a LaCrosseGateway32 then)
+            ---
+
+            ## 🔌 Flashing the Heltec Board via ESPWebTool
+
+            Flash the firmware directly from your browser — no local tools or drivers needed.
+
+            ### Requirements
+            - **Browser:** Google Chrome or Microsoft Edge (latest version)
+            - **Cable:** USB cable connected to your Heltec board
+
+            ### Steps
+
+            1. **Download** the latest `.bin` firmware file from the **Assets** section of this release.
+            2. **Connect** your Heltec board to your computer via USB.
+            3. **Open** [https://espressif.github.io/esptool-js/](https://espressif.github.io/esptool-js/) in Chrome or Edge.
+            4. Click **Connect** and select the correct COM / serial port of your Heltec board from the popup.
+            5. Under **Flash Address**, enter:
+               - `0x1000` → Heltec WiFi LoRa 32 **V2** (ESP32)
+               - `0x0` → Heltec WiFi LoRa 32 **V3** (ESP32-S3)
+            6. Click **Choose File** and select the downloaded `.bin` file.
+            7. Click **Program** and wait until the progress bar reaches 100 %.
+            8. Press the **Reset** button on the board once flashing is complete.
+
+            ⚠️ **Tip:** If the board is not detected, hold the **BOOT** button while plugging in the USB cable to enter flash mode manually.
+
+            ### Update Methods
             
             #### Method 1: Web Interface (Recommended)
             1. Download the .bin file below
@@ -97,6 +124,9 @@ jobs:
             1. Download the .bin file below
             2. Go to http://your-device-ip/update
             3. Select the downloaded file and upload
+
+            #### Method 3: Manual Upload over ESPWebTool
+            (see above)
             
             ### Hardware Support
             - TTGO LoRa32 V2.1 (4MB Flash required)
