@@ -2294,11 +2294,11 @@ void handle_config() {
     static unsigned long token = millis();
     static bool just_saved = false;
     
-    if (server.hasArg("fhem_format")) {
-        config.fhem_format = server.arg("fhem_format") == "1";
-        config.changed = true;
-        config_changed = true;
-    }
+//    if (server.hasArg("fhem_format")) {
+//        config.fhem_format = server.arg("fhem_format") == "1";
+//        config.changed = true;
+//        config_changed = true;
+//    }
     if (server.hasArg("id") && server.hasArg("name")) {
         String _id = server.arg("id");
         String name = server.arg("name");
@@ -2331,14 +2331,6 @@ void handle_config() {
         config.mqtt_pass = server.arg("mqtt_pass");
         config.changed = true;
         config_changed = true;
-    }
-    String saveArg = server.arg("save");
-    if (server.hasArg("save") && saveArg == String(token)) {
-        save_idmap();
-        save_config();
-        config_changed = false;
-        just_saved = true;
-        Serial.println("SAVE!");
     }
     if (server.hasArg("debug_mode")) {
         String _on = server.arg("debug_mode");
@@ -2553,7 +2545,18 @@ void handle_config() {
 
     }
 
-    token = millis();
+    // --- SAVE BLOCK (an das Ende verschoben) ---
+    String saveArg = server.arg("save");
+    if (server.hasArg("save") && saveArg == String(token)) {
+        save_idmap();
+        save_config();
+        config_changed = false;
+        just_saved = true;
+        Serial.println("SAVE!");
+    }
+    if (!just_saved) {
+        token = millis();
+    }
     
     String resp;
     add_header(resp, "LaCrosse2MQTT Configuration");
@@ -2960,8 +2963,6 @@ if (any_active && interval_sec > 0) {
         resp += "<p class='info-text'>Aktiviere FHEM-Modus weiter unten um den TCP-Server zu starten.</p>";
         resp += "</div>";
     }
-
-//    resp += "</div>";
 
     token = millis();
 
