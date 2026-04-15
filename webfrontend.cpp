@@ -69,7 +69,7 @@ static HTTPUpdateServer httpUpdater;
 
 static String formatHexId(uint8_t id) {
     char buf[8];
-    snprintf(buf, sizeof(buf), "0x%X", id & 0x3F);
+    snprintf(buf, sizeof(buf), "%X", id & 0x3F);
     return String(buf);
 }
 
@@ -778,6 +778,7 @@ void handle_sensors_json() {
         
         JsonObject sensor = sensors.add<JsonObject>();
         sensor["id"] = fcache[i].ID;
+        sensor["id_hex"] = formatRawIdHex(fcache[i].ID);
         sensor["ch"] = fcache[i].channel;
         sensor["type"] = String(fcache[i].sensorType);
         sensor["temp"] = serialized(String(fcache[i].temp, 1));
@@ -898,7 +899,7 @@ s += "<script>"
 
 // Tabellen-Header
 "const t=document.getElementById('sensor-table');if(t){const h=t.querySelector('thead tr');if(h){"
-"let hh='<th>ID</th><th>Ch</th><th>Type</th><th>Temperature</th>';"
+"let hh='<th>ID</th><th>ID HEX</th><th>Ch</th><th>Type</th><th>Temperature</th>';"
 "if(hasTempCh2)hh+='<th>Temp 2</th>';if(hasHumidity)hh+='<th>Humidity</th>';"
 "if(hasWindSpeed)hh+='<th>Wind Speed</th>';if(hasWindDir)hh+='<th>Wind Dir</th>';"
 "if(hasWindGust)hh+='<th>Wind Gust</th>';if(hasRain)hh+='<th>Rain</th>';"
@@ -908,7 +909,7 @@ s += "<script>"
 
 // Tabellen-Body
 "const b=document.getElementById('sensor-tbody');if(b){b.innerHTML='';data.sensors.forEach(s=>{"
-"const r=b.insertRow();let rh='<td>'+s.id+'</td><td>'+s.ch+'</td><td>'+s.type+'</td><td>'+s.temp+' °C</td>';"
+"const r=b.insertRow();let rh='<td>'+s.id+'</td><td>'+s.id_hex+'</td><td>'+s.ch+'</td><td>'+s.type+'</td><td>'+s.temp+' °C</td>';"
 "if(hasTempCh2)rh+='<td>'+(s.temp2!==null?s.temp2+' °C':'-')+'</td>';"
 "if(hasHumidity)rh+='<td>'+(s.humi>0&&s.humi<=100?s.humi+' %':'-')+'</td>';"
 "if(hasWindSpeed)rh+='<td>'+(s.wind_speed!==null?s.wind_speed+' km/h':'-')+'</td>';"

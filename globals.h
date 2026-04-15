@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <Arduino.h>
 
-#define LACROSSE2MQTT_VERSION "v2026.2.6"
+#define LACROSSE2MQTT_VERSION "v2026.4.15"
 
 /* if not heltec_lora_32_v2 board... */
 #ifndef WIFI_LoRa_32_V2
