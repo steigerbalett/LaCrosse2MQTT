@@ -433,7 +433,7 @@ void handle_install_update() {
     
     server.send(200, "application/json", "{\"status\":\"started\",\"message\":\"Update installation started\"}");
     
-    installUpdate();
+    xTaskCreate([](void*){ installUpdate(false); vTaskDelete(NULL); }, "OTA_Task", 16384, NULL, 1, NULL);
 }
 
 void handle_install_update_insecure() {
@@ -449,7 +449,7 @@ void handle_install_update_insecure() {
     
     server.send(200, "application/json", "{\"status\":\"started\",\"message\":\"Update installation started (insecure mode)\"}");
     
-    installUpdate(true);
+    xTaskCreate([](void*){ installUpdate(true); vTaskDelete(NULL); }, "OTA_Task", 16384, NULL, 1, NULL);
 }
 
 void handle_update_progress() {
