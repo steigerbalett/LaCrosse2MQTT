@@ -306,7 +306,6 @@ bool save_config()
     doc["proto_hp1000"] = config.proto_hp1000;
     doc["proto_wh65b"] = config.proto_wh65b;
     doc["toggle_interval_ms"] = config.toggle_interval_ms;
-    doc["fhem_mode"] = config.fhem_mode;
     doc["fhem_format"] = config.fhem_format;
     
     if (serializeJson(doc, cfg) == 0) {
@@ -2356,6 +2355,7 @@ void handle_config() {
         if (new_fhem != config.fhem_mode) {
             config.fhem_mode = new_fhem;
             config_changed = true;
+            config.changed = true;
             if (new_fhem) {
                 FHEMConnector::setFormat(config.fhem_format);
                 FHEMConnector::initTCPServer();
