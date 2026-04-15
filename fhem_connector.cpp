@@ -100,9 +100,9 @@ void FHEMConnector::sendLaCrosseGatewayHandshake(WiFiClient* client) {
         client->println("Ready");
     } else {
         // LaCrosseGateway Handshake
-        client->println("[LaCrosseITPlusReader V2026]");
-        client->printf("Freq: %d\n", freq);
-        client->printf("Rate: %d\n", get_current_datarate());
+        client->println("[LaCrosseGateway32 V2026]");
+        client->print("Freq: ");  client->println(freq);
+        client->print("Rate: ");  client->println(get_current_datarate());
         client->println("Ready");
     }
     Serial.printf("[FHEM] Handshake gesendet (%s)\n", getCurrentFormatName().c_str());
