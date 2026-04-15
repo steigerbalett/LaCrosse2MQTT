@@ -2964,8 +2964,6 @@ if (any_active && interval_sec > 0) {
         resp += "</div>";
     }
 
-    token = millis();
-
     resp += "<div class='card'>";
     resp += "<h2>⏱️ Protocol Switching Settings</h2>";
     resp += "<form action='/config.html'>";
