@@ -67,6 +67,12 @@ extern float cpu_usage;
 static WebServer server(80);
 static HTTPUpdateServer httpUpdater;
 
+static String formatHexId(uint8_t id) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "0x%X", id & 0x3F);
+    return String(buf);
+}
+
 int name2id(const char *fname, const int start = 0)
 {
     if (strlen(fname) - start != 2) {
@@ -536,6 +542,7 @@ void add_current_table(String &s, bool rawdata)
     s += "<table id='sensor-table'>\n";
     s += "<thead><tr>";
     s += "<th>ID</th>";
+    s += "<th>(ID Hex)</th>";
     s += "<th>Ch</th>";
     s += "<th>Type</th>";
     s += "<th>Temperature</th>";
@@ -598,6 +605,8 @@ void add_current_table(String &s, bool rawdata)
         
         // ID
         s += "<td>" + String(displayID) + "</td>";
+        // ID im Headezimal Format
+        s += "<td>" + formatHexId(displayID) + "</td>";
         
         // Channel
         s += "<td>" + String(fcache[i].channel) + "</td>";
@@ -2331,15 +2340,6 @@ void handle_config() {
         just_saved = true;
         Serial.println("SAVE!");
     }
-//    if (server.hasArg("save")) {
-//        if (server.arg("save") == String(token)) {
-//            Serial.println("SAVE!");
-//            save_idmap();
-//            save_config();
-//            config_changed = false;
-//            just_saved = true;
-//        }
-//    }
     if (server.hasArg("debug_mode")) {
         String _on = server.arg("debug_mode");
         int tmp = _on.toInt();
